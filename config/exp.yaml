@@ -1,0 +1,30 @@
+data:
+  client_split: 0.2
+  dataset:
+    name: mnist
+    path: ./data
+  distribution:
+    name: dir
+    beta: 0.02
+  keep_test: true
+  sampling_perc: 1.0
+  server_split: 0.0
+  server_test: true
+  uniform_test: false
+eval:
+  eval_every: 1
+  locals: true
+  post_fit: true
+  pre_fit: true
+  server: true
+  task: classification
+exp:
+  device: cpu
+  seed: 42
+logger:
+  name: CsvLog
+  log_dir: runs/fluke_mnist_noniid_traces-lep-30
+protocol:
+  eligible_perc: 1.0
+  n_clients: 10
+  n_rounds: 50

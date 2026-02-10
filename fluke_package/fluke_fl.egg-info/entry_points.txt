@@ -1,0 +1,3 @@
+[console_scripts]
+fluke = fluke.run:main
+fluke-get = fluke.get:main

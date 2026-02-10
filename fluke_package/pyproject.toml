@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=77.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]  # list of folders that contain the packages (["."] by default)
+include = ["fluke", "fluke.data", "fluke.utils", "fluke.algorithms", "fluke.distr"]  # package names should match these glob patterns (["*"] by default)
+exclude = []  # exclude packages matching these glob patterns (empty by default)
+namespaces = false  # to disable scanning PEP 420 namespaces (true by default)
+
+[project]
+license = "LGPL-2.1-or-later"
+license-files = ["LICENSE"]
+name = "fluke-fl"
+version = "0.7.9"
+authors = [
+  { name="Mirko Polato", email="mirko.polato@unito.it" }
+]
+description = "Federated Learning Utility framework for Experimentation and research."
+readme = {file = "README.md", content-type = "text/markdown"}
+requires-python = ">=3.10"
+keywords = ["federated learning", "deep learning", "pytorch"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent"
+]
+
+dependencies = [
+    "numpy",
+    "pandas",
+    "scikit-learn",
+    "torch",
+    "torchmetrics",
+    "torchvision",
+    "rich",
+    "typer",
+    "wandb",
+    "datasets",
+    "psutil",
+    "tensorboard",
+    "clearml",
+    "matplotlib",
+    "seaborn",
+    "diskcache",
+    "opacus",
+    "cerberus",
+    "hydra-core",
+    "requests",
+    "pyyaml",
+    "omegaconf"
+]
+
+[project.scripts]
+fluke = "fluke.run:main"
+fluke-get = "fluke.get:main"
+
+[project.urls]
+Documentation = "https://makgyver.github.io/fluke"
+Repository = "https://github.com/makgyver/fluke"
+Issues = "https://github.com/makgyver/fluke/issues"

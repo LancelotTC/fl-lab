@@ -1,0 +1,20 @@
+hyperparameters:
+  client:
+    batch_size: 64
+    local_epochs: 5
+    loss: CrossEntropyLoss
+    optimizer:
+      lr: 0.01
+      momentum: 0.9
+      weight_decay: 1.0e-05
+    persistency: true
+    scheduler:
+      gamma: 1
+      step_size: 1
+  model: MNIST_2NN
+  server:
+    weighted: true
+    lr: 1.0
+    neighbors: 4
+    consensus_steps: 5
+name: fluke.algorithms.decentralized.DecentralizedFedAvg

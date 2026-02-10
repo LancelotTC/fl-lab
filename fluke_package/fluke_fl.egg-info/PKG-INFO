@@ -1,0 +1,43 @@
+Metadata-Version: 2.4
+Name: fluke-fl
+Version: 0.7.9
+Summary: Federated Learning Utility framework for Experimentation and research.
+Author-email: Mirko Polato <mirko.polato@unito.it>
+License-Expression: LGPL-2.1-or-later
+Project-URL: Documentation, https://makgyver.github.io/fluke
+Project-URL: Repository, https://github.com/makgyver/fluke
+Project-URL: Issues, https://github.com/makgyver/fluke/issues
+Keywords: federated learning,deep learning,pytorch
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Developers
+Classifier: Intended Audience :: Science/Research
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: numpy
+Requires-Dist: pandas
+Requires-Dist: scikit-learn
+Requires-Dist: torch
+Requires-Dist: torchmetrics
+Requires-Dist: torchvision
+Requires-Dist: rich
+Requires-Dist: typer
+Requires-Dist: wandb
+Requires-Dist: datasets
+Requires-Dist: psutil
+Requires-Dist: tensorboard
+Requires-Dist: clearml
+Requires-Dist: matplotlib
+Requires-Dist: seaborn
+Requires-Dist: diskcache
+Requires-Dist: opacus
+Requires-Dist: cerberus
+Requires-Dist: hydra-core
+Requires-Dist: requests
+Requires-Dist: pyyaml
+Requires-Dist: omegaconf
+Dynamic: license-file
