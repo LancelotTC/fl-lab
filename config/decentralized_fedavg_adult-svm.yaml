@@ -1,0 +1,22 @@
+hyperparameters:
+    client:
+        batch_size: 64
+        local_epochs: 5
+        loss: CrossEntropyLoss
+        optimizer:
+            lr: 0.001
+            momentum: 0.9
+            weight_decay: 1.0e-05
+        persistency: true
+        scheduler:
+            gamma: 1
+            step_size: 1
+    model: Adult_SVM
+    net_args:
+        input_dim: 14
+    server:
+        weighted: true
+        lr: 1.0
+        neighbors: 4
+        consensus_steps: 5
+name: fluke.algorithms.decentralized.DecentralizedFedAvgSVM

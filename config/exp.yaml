@@ -1,7 +1,7 @@
 data:
   client_split: 0.2
   dataset:
-    name: mnist
+    name: adult
     path: ./data
   distribution:
     name: dir
@@ -19,7 +19,7 @@ eval:
   server: true
   task: classification
 exp:
-  device: cpu
+  device: cuda
   seed: 42
 logger:
   name: CsvLog
