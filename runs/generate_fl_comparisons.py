@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Generate federated learning comparison metrics/plots across LogReg, MLP, and SVM runs.
 
@@ -9,12 +8,11 @@ Outputs:
 - Time metrics CSV backing the time chart.
 """
 
-from __future__ import annotations
-
 import argparse
 import csv
 import re
 import sys
+from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -38,7 +36,21 @@ def parse_config_from_dirname(dirname: str) -> Optional[Tuple[int, int, int]]:
     match = re.search(r"(\d+)[_-](\d+)[_-](\d+)$", dirname)
     if not match:
         return None
-    return tuple(int(match.group(i)) for i in range(1, 4))  # type: ignore[return-value]
+    return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+
+
+def run_quality_score(run_dir: Path) -> Tuple[int, float]:
+    """
+    Rank candidate run folders for the same config.
+    Higher score means more complete/usable run data.
+    """
+    required = ("global_metrics.csv", "run_metrics.csv", "locals_metrics.csv", "postfit_metrics.csv")
+    score = sum(1 for name in required if (run_dir / name).exists())
+    try:
+        mtime = run_dir.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    return score, mtime
 
 
 def read_global_f1(global_metrics_path: Path) -> Tuple[List[int], List[float], str]:
@@ -53,9 +65,7 @@ def read_global_f1(global_metrics_path: Path) -> Tuple[List[int], List[float], s
         elif "micro_f1" in reader.fieldnames:
             f1_column = "micro_f1"
         else:
-            raise ValueError(
-                f"No macro_f1/micro_f1 column found in {global_metrics_path}"
-            )
+            raise ValueError(f"No macro_f1/micro_f1 column found in {global_metrics_path}")
         for row in reader:
             rounds.append(int(float(row["round"])))
             f1_values.append(float(row[f1_column]))
@@ -80,14 +90,18 @@ def discover_runs(
         model_dir = runs_dir / model
         if not model_dir.exists():
             continue
+        candidates_by_config: Dict[Tuple[int, int, int], List[Path]] = defaultdict(list)
         for entry in sorted(model_dir.iterdir()):
             if not entry.is_dir():
                 continue
             config = parse_config_from_dirname(entry.name)
             if config is None:
                 continue
-            # Keep first seen per model/config (deterministic due sorting).
-            discovered[model].setdefault(config, entry)
+            candidates_by_config[config].append(entry)
+
+        for config, candidates in candidates_by_config.items():
+            # Pick the most complete run; tie-break by latest modification time.
+            discovered[model][config] = max(candidates, key=run_quality_score)
     return discovered
 
 
@@ -236,9 +250,7 @@ def main() -> int:
 
         last_round = aligned_rounds[-1]
         for model in MODELS:
-            final_f1_summary_rows.append(
-                [batch, epochs, frac, model, last_round, model_to_round_f1[model][last_round]]
-            )
+            final_f1_summary_rows.append([batch, epochs, frac, model, last_round, model_to_round_f1[model][last_round]])
 
     final_summary_csv = out_dir / "final_round_f1_summary.csv"
     with final_summary_csv.open("w", newline="", encoding="utf-8") as handle:
