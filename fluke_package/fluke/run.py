@@ -42,7 +42,11 @@ def fluke_banner() -> None:
     from rich.panel import Panel
 
     fluke_pretty = run.__doc__
-    console.print(Panel(fluke_pretty, subtitle=f"v{__version__}", style="bold white"), width=53)
+    try:
+        console.print(Panel(fluke_pretty, subtitle=f"v{__version__}", style="bold white"), width=53)
+    except UnicodeEncodeError:
+        # Fallback for Windows terminals using legacy encodings (e.g., cp1252).
+        console.print(Panel("fluke", subtitle=f"v{__version__}", style="bold white"), width=53)
 
 
 def version_callback(value: bool) -> None:
@@ -59,6 +63,28 @@ def _compose_config(cfg_base: str, overrides: Optional[List[str]]) -> DictConfig
         config_dir=str(cfg_base_folder), job_name="fluke_cli", version_base=None
     ):
         return compose(config_name=cfg_base_name, overrides=overrides)
+
+
+def _split_overrides(
+    overrides: Optional[List[str]],
+) -> tuple[list[str], list[str]]:
+    """Split CLI overrides into experiment vs algorithm overrides.
+
+    CLI callers pass algorithm overrides prefixed with ``method.``.
+    The algorithm config itself is rooted at ``hyperparameters``/``name``,
+    so this function strips the ``method.`` prefix before composing it.
+    """
+    if overrides is None:
+        return [], []
+
+    overrides_exp: list[str] = []
+    overrides_alg: list[str] = []
+    for item in overrides:
+        if item.startswith("method."):
+            overrides_alg.append(item[len("method.") :])
+        else:
+            overrides_exp.append(item)
+    return overrides_exp, overrides_alg
 
 
 @app.command()
@@ -159,8 +185,7 @@ def federation(
     try:
 
         if overrides is not None:
-            overrides_exp = [v for v in overrides if not v.startswith("method.")]
-            overrides_alg = [v for v in overrides if v.startswith("method.")]
+            overrides_exp, overrides_alg = _split_overrides(overrides)
             exp_cfg = _compose_config(exp_cfg, overrides_exp)
             alg_cfg = _compose_config(alg_cfg, overrides_alg)
             OmegaConf.set_struct(exp_cfg, False)
@@ -189,8 +214,7 @@ def decentralized(
     try:
 
         if overrides is not None:
-            overrides_exp = [v for v in overrides if not v.startswith("method.")]
-            overrides_alg = [v for v in overrides if v.startswith("method.")]
+            overrides_exp, overrides_alg = _split_overrides(overrides)
             exp_cfg = _compose_config(exp_cfg, overrides_exp)
             alg_cfg = _compose_config(alg_cfg, overrides_alg)
             OmegaConf.set_struct(exp_cfg, False)

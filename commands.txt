@@ -1,4 +1,32 @@
+# Person A - IID runs
 
-SVM:
-Lancelot : fluke federation config/medical-data-non-iid.yaml config/fl-config-svm.yaml
-Maïa : fluke federation config/medical-data-iid.yaml config/fl-config-svm.yaml
+# Baseline (no DP)
+fluke federation config/medical-data-iid.yaml config/fl-config-svm.yaml logger.log_dir=runs/medical-SVM-iid
+
+# DP runs (same DP YAML, different noise set from command)
+fluke federation config/medical-data-iid.yaml config/fl-config-svm-dp.yaml method.hyperparameters.client.noise_mul=0.0 method.hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-iid-noise-0p0-mgn-1p0
+fluke federation config/medical-data-iid.yaml config/fl-config-svm-dp.yaml method.hyperparameters.client.noise_mul=0.1 method.hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-iid-noise-0p1-mgn-1p0
+fluke federation config/medical-data-iid.yaml config/fl-config-svm-dp.yaml method.hyperparameters.client.noise_mul=0.3 method.hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-iid-noise-0p3-mgn-1p0
+fluke federation config/medical-data-iid.yaml config/fl-config-svm-dp.yaml method.hyperparameters.client.noise_mul=0.6 method.hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-iid-noise-0p6-mgn-1p0
+fluke federation config/medical-data-iid.yaml config/fl-config-svm-dp.yaml method.hyperparameters.client.noise_mul=1.0 method.hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-iid-noise-1p0-mgn-1p0
+
+# Person B - non-IID Dirichlet runs
+
+# Baseline (no DP)
+fluke federation config/medical-data-non-iid-dir.yaml config/fl-config-svm.yaml logger.log_dir=runs/medical-SVM-non-iid-dir
+
+# DP runs (same DP YAML, different noise set from command)
+fluke federation config/medical-data-non-iid-dir.yaml config/fl-config-svm-dp.yaml method.hyperparameters.client.noise_mul=0.0 method.hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-non-iid-dir-noise-0p0-mgn-1p0
+fluke federation config/medical-data-non-iid-dir.yaml config/fl-config-svm-dp.yaml method.hyperparameters.client.noise_mul=0.1 method.hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-non-iid-dir-noise-0p1-mgn-1p0
+fluke federation config/medical-data-non-iid-dir.yaml config/fl-config-svm-dp.yaml method.hyperparameters.client.noise_mul=0.3 method.hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-non-iid-dir-noise-0p3-mgn-1p0
+fluke federation config/medical-data-non-iid-dir.yaml config/fl-config-svm-dp.yaml method.hyperparameters.client.noise_mul=0.6 method.hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-non-iid-dir-noise-0p6-mgn-1p0
+fluke federation config/medical-data-non-iid-dir.yaml config/fl-config-svm-dp.yaml method.hyperparameters.client.noise_mul=1.0 method.hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-non-iid-dir-noise-1p0-mgn-1p0
+
+# Optional: non-IID quantity-skew runs (unequal client data volumes)
+# fluke federation config/medical-data-non-iid.yaml config/fl-config-svm.yaml logger.log_dir=runs/medical-SVM-non-iid
+
+# Optional helper sweep (real fluke CLI)
+# python runs/run_medical_dp_sweep.py --noise-levels 0.0 0.1 0.3 0.6 1.0 --max-grad-norm 1.0 --rounds 50
+
+# Reporting (quality + fairness + cost + DP tradeoff)
+python runs/generate_fl_comparisons.py --dataset medical
