@@ -72,6 +72,9 @@ class RunRecord:
     final_micro_f1: Optional[float]
     best_round_by_macro_f1: Optional[int]
     best_macro_f1: Optional[float]
+    final_client_accuracy_mean: Optional[float]
+    final_client_macro_f1_mean: Optional[float]
+    final_client_micro_f1_mean: Optional[float]
     fairness_final_acc_mean: Optional[float]
     fairness_final_acc_std: Optional[float]
     fairness_final_acc_gap: Optional[float]
@@ -270,7 +273,54 @@ def compute_fairness_from_locals(run_dir: Path) -> tuple[dict[str, Optional[floa
     return result, fairness_by_round
 
 
-def parse_run(run_dir: Path, runs_dir: Path) -> tuple[RunRecord, pd.DataFrame, Optional[pd.DataFrame]]:
+def compute_client_quality_from_locals(
+    run_dir: Path,
+) -> tuple[dict[str, Optional[float]], Optional[pd.DataFrame]]:
+    locals_path = run_dir / LOCALS_METRICS_FILE
+    defaults = {
+        "final_client_accuracy_mean": None,
+        "final_client_macro_f1_mean": None,
+        "final_client_micro_f1_mean": None,
+    }
+    if not locals_path.exists():
+        return defaults, None
+
+    df = pd.read_csv(locals_path)
+    if df.empty or "round" not in df.columns:
+        return defaults, None
+
+    metric_cols = [c for c in QUALITY_METRICS if c in df.columns]
+    if not metric_cols:
+        return defaults, None
+
+    by_round = []
+    for rnd, grp in df.groupby("round", sort=True):
+        row = {"round": int(rnd)}
+        for metric in metric_cols:
+            vals = grp[metric].dropna().to_numpy(dtype=float)
+            if vals.size == 0:
+                continue
+            row[f"client_{metric}_mean"] = float(vals.mean())
+            row[f"client_{metric}_std"] = float(vals.std(ddof=0))
+            row[f"client_{metric}_gap"] = float(vals.max() - vals.min())
+        by_round.append(row)
+
+    client_by_round = pd.DataFrame(by_round).sort_values("round")
+    if client_by_round.empty:
+        return defaults, None
+
+    last = client_by_round.iloc[-1]
+    result = {
+        "final_client_accuracy_mean": to_float_or_none(last.get("client_accuracy_mean")),
+        "final_client_macro_f1_mean": to_float_or_none(last.get("client_macro_f1_mean")),
+        "final_client_micro_f1_mean": to_float_or_none(last.get("client_micro_f1_mean")),
+    }
+    return result, client_by_round
+
+
+def parse_run(
+    run_dir: Path, runs_dir: Path
+) -> tuple[RunRecord, pd.DataFrame, Optional[pd.DataFrame], Optional[pd.DataFrame]]:
     global_path = choose_global_metrics_path(run_dir)
     gdf = pd.read_csv(global_path)
     if gdf.empty:
@@ -296,6 +346,7 @@ def parse_run(run_dir: Path, runs_dir: Path) -> tuple[RunRecord, pd.DataFrame, O
         best_round_by_macro_f1 = int(best_row["round"])
         best_macro_f1 = to_float_or_none(best_row["macro_f1"])
 
+    client_quality, client_by_round = compute_client_quality_from_locals(run_dir)
     fairness, fairness_by_round = compute_fairness_from_locals(run_dir)
 
     run_time_seconds = read_run_time_seconds(run_dir)
@@ -330,6 +381,9 @@ def parse_run(run_dir: Path, runs_dir: Path) -> tuple[RunRecord, pd.DataFrame, O
         final_micro_f1=final_micro_f1,
         best_round_by_macro_f1=best_round_by_macro_f1,
         best_macro_f1=best_macro_f1,
+        final_client_accuracy_mean=client_quality["final_client_accuracy_mean"],
+        final_client_macro_f1_mean=client_quality["final_client_macro_f1_mean"],
+        final_client_micro_f1_mean=client_quality["final_client_micro_f1_mean"],
         fairness_final_acc_mean=fairness["fairness_final_acc_mean"],
         fairness_final_acc_std=fairness["fairness_final_acc_std"],
         fairness_final_acc_gap=fairness["fairness_final_acc_gap"],
@@ -342,7 +396,7 @@ def parse_run(run_dir: Path, runs_dir: Path) -> tuple[RunRecord, pd.DataFrame, O
         comm_cost_per_round=comm_cost_per_round,
         run_time_per_round=run_time_per_round,
     )
-    return rec, gdf, fairness_by_round
+    return rec, gdf, fairness_by_round, client_by_round
 
 
 def make_line_plot(
@@ -449,13 +503,14 @@ def main() -> int:
     records: list[RunRecord] = []
     roundwise_rows: list[pd.DataFrame] = []
     fairness_rows: list[pd.DataFrame] = []
+    client_roundwise_rows: list[pd.DataFrame] = []
     errors: list[str] = []
 
     for run_dir in run_dirs:
         if args.dataset and args.dataset.lower() not in run_dir.name.lower():
             continue
         try:
-            record, gdf, fairness = parse_run(run_dir, runs_dir)
+            record, gdf, fairness, client_by_round = parse_run(run_dir, runs_dir)
             records.append(record)
 
             local_global = gdf.copy()
@@ -474,6 +529,15 @@ def main() -> int:
                 local_fair["setting"] = record.setting
                 local_fair["dp_noise_mul"] = record.dp_noise_mul
                 fairness_rows.append(local_fair)
+
+            if client_by_round is not None and not client_by_round.empty:
+                local_client = client_by_round.copy()
+                local_client["run_label"] = record.run_label
+                local_client["dataset"] = record.dataset
+                local_client["model"] = record.model
+                local_client["setting"] = record.setting
+                local_client["dp_noise_mul"] = record.dp_noise_mul
+                client_roundwise_rows.append(local_client)
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{run_dir}: {exc}")
 
@@ -500,6 +564,10 @@ def main() -> int:
     fairness_csv = out_dir / "roundwise_fairness_metrics.csv"
     fairness_df.to_csv(fairness_csv, index=False)
 
+    client_roundwise_df = concat_drop_all_na(client_roundwise_rows)
+    client_roundwise_csv = out_dir / "roundwise_client_metrics.csv"
+    client_roundwise_df.to_csv(client_roundwise_csv, index=False)
+
     # Quality plot: macro_f1 if available, else accuracy.
     quality_series = []
     for r in records:
@@ -518,6 +586,94 @@ def main() -> int:
         "Quality vs Round",
         "metric value",
         quality_series,
+    )
+
+    # Client quality plot: average across clients by round.
+    client_quality_series = []
+    if not client_roundwise_df.empty:
+        for r in records:
+            s = client_roundwise_df[client_roundwise_df["run_label"] == r.run_label]
+            if s.empty:
+                continue
+            y_col = (
+                "client_macro_f1_mean"
+                if "client_macro_f1_mean" in s.columns
+                else ("client_accuracy_mean" if "client_accuracy_mean" in s.columns else None)
+            )
+            if y_col is None:
+                continue
+            s = s.dropna(subset=["round", y_col]).sort_values("round")
+            if s.empty:
+                continue
+            client_quality_series.append(
+                (
+                    r.run_label,
+                    s["round"].to_numpy(dtype=float),
+                    s[y_col].to_numpy(dtype=float),
+                )
+            )
+    make_line_plot(
+        out_dir / "quality_client_mean_vs_round.png",
+        "Client Mean Quality vs Round",
+        "client mean metric value",
+        client_quality_series,
+    )
+
+    # Overlay plot: server metric vs client mean metric.
+    server_client_series = []
+    if not client_roundwise_df.empty and not roundwise_df.empty:
+        for r in records:
+            s_server = roundwise_df[roundwise_df["run_label"] == r.run_label]
+            s_client = client_roundwise_df[client_roundwise_df["run_label"] == r.run_label]
+            if s_server.empty or s_client.empty:
+                continue
+            if "macro_f1" in s_server.columns and "client_macro_f1_mean" in s_client.columns:
+                s_server = s_server.dropna(subset=["round", "macro_f1"]).sort_values("round")
+                s_client = s_client.dropna(subset=["round", "client_macro_f1_mean"]).sort_values(
+                    "round"
+                )
+                if not s_server.empty:
+                    server_client_series.append(
+                        (
+                            f"{r.run_label} [server]",
+                            s_server["round"].to_numpy(dtype=float),
+                            s_server["macro_f1"].to_numpy(dtype=float),
+                        )
+                    )
+                if not s_client.empty:
+                    server_client_series.append(
+                        (
+                            f"{r.run_label} [clients-mean]",
+                            s_client["round"].to_numpy(dtype=float),
+                            s_client["client_macro_f1_mean"].to_numpy(dtype=float),
+                        )
+                    )
+            elif "accuracy" in s_server.columns and "client_accuracy_mean" in s_client.columns:
+                s_server = s_server.dropna(subset=["round", "accuracy"]).sort_values("round")
+                s_client = s_client.dropna(subset=["round", "client_accuracy_mean"]).sort_values(
+                    "round"
+                )
+                if not s_server.empty:
+                    server_client_series.append(
+                        (
+                            f"{r.run_label} [server]",
+                            s_server["round"].to_numpy(dtype=float),
+                            s_server["accuracy"].to_numpy(dtype=float),
+                        )
+                    )
+                if not s_client.empty:
+                    server_client_series.append(
+                        (
+                            f"{r.run_label} [clients-mean]",
+                            s_client["round"].to_numpy(dtype=float),
+                            s_client["client_accuracy_mean"].to_numpy(dtype=float),
+                        )
+                    )
+    make_line_plot(
+        out_dir / "quality_server_vs_clients_mean_vs_round.png",
+        "Server vs Clients-Mean Quality vs Round",
+        "metric value",
+        server_client_series,
     )
 
     # Fairness plot: accuracy gap across clients by round.
@@ -619,6 +775,7 @@ def main() -> int:
     print(f"Wrote: {summary_csv}")
     print(f"Wrote: {roundwise_csv}")
     print(f"Wrote: {fairness_csv}")
+    print(f"Wrote: {client_roundwise_csv}")
     print(f"Wrote plots in: {out_dir}")
 
     if errors:
