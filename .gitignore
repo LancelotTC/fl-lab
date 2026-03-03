@@ -1,0 +1,6 @@
+*/pycache/
+plots/
+
+*.txt
+*.pyc
+tempCodeRunnerFile.*
