@@ -1,7 +1,6 @@
-/fluke_package
-*.txt
-
 */pycache/
+plots/
+
+*.txt
 *.pyc
 tempCodeRunnerFile.*
-plots/
