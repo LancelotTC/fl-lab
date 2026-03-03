@@ -16,6 +16,7 @@ fluke federation config/medical-data-iid.yaml config/fl-config-svm-dp.yaml +meth
 
 # Baseline (no DP)
 fluke federation config/medical-data-non-iid.yaml config/fl-config-svm.yaml logger.log_dir=runs/medical-SVM-non-iid
+fluke federation config/medical-data-vertical.yaml config/fl-config-svm.yaml logger.log_dir=runs/medical-SVM-vertical
 
 # DP runs (same DP YAML, different noise set from command)
 fluke federation config/medical-data-non-iid.yaml config/fl-config-svm-dp.yaml +method.hyperparameters.client.noise_mul=0.0 +method.hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-non-iid-noise-0p0-mgn-1p0

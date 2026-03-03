@@ -435,8 +435,14 @@ class DataSplitter:
 
         client_tr_assignments = []
         client_te_assignments = []
+        vfl_feature_splits = None
+        if self.distribution == "vertical":
+            vfl_feature_splits = self._resolve_vertical_feature_splits(client_Xtr, n_clients)
+
         for c in range(n_clients):
             Xtr_client, Ytr_client = client_Xtr[assignments_tr[c]], client_Ytr[assignments_tr[c]]
+            if vfl_feature_splits is not None:
+                Xtr_client = self._apply_vertical_feature_mask(Xtr_client, vfl_feature_splits[c])
             client_tr_assignments.append(
                 FastDataLoader(
                     Xtr_client,
@@ -451,6 +457,8 @@ class DataSplitter:
             if assignments_te is not None:
                 Xte_client = client_Xte[assignments_te[c]]
                 Yte_client = client_Yte[assignments_te[c]]
+                if vfl_feature_splits is not None:
+                    Xte_client = self._apply_vertical_feature_mask(Xte_client, vfl_feature_splits[c])
                 client_te_assignments.append(
                     FastDataLoader(
                         Xte_client,
@@ -477,6 +485,49 @@ class DataSplitter:
             else None
         )
         return (client_tr_assignments, client_te_assignments), server_te
+
+    @staticmethod
+    def _apply_vertical_feature_mask(X: torch.Tensor, feature_idx: np.ndarray) -> torch.Tensor:
+        """Mask all features except those assigned to the client.
+
+        Note:
+            This is a practical VFL emulation that keeps tensor shape identical across clients,
+            allowing standard parameter aggregation with existing FL algorithms.
+        """
+        if X.ndim != 2:
+            raise ValueError("vertical distribution currently supports only 2D tabular tensors.")
+        X_masked = torch.zeros_like(X)
+        X_masked[:, feature_idx] = X[:, feature_idx]
+        return X_masked
+
+    def _resolve_vertical_feature_splits(
+        self, X: torch.Tensor, n_clients: int
+    ) -> list[np.ndarray]:
+        if X.ndim != 2:
+            raise ValueError("vertical distribution currently supports only 2D tabular tensors.")
+
+        n_features = X.shape[1]
+        if "feature_splits" in self.dist_args:
+            splits = self.dist_args.feature_splits
+            if len(splits) != n_clients:
+                raise ValueError(
+                    f"vertical feature_splits must have one split per client "
+                    f"({len(splits)} != {n_clients})."
+                )
+            parsed = [np.array(list(split), dtype=int) for split in splits]
+        else:
+            parsed = [np.array(chunk, dtype=int) for chunk in np.array_split(np.arange(n_features), n_clients)]
+
+        for i, split in enumerate(parsed):
+            if split.size == 0:
+                raise ValueError(f"vertical split for client {i} is empty.")
+            if np.any(split < 0) or np.any(split >= n_features):
+                raise ValueError(
+                    f"vertical split for client {i} contains invalid feature indexes. "
+                    f"Valid range is [0, {n_features - 1}]."
+                )
+
+        return parsed
 
     @staticmethod
     def iid(
@@ -515,6 +566,26 @@ class DataSplitter:
                     assignments[-1][cid] = np.append(assignments[-1][cid], idx[eid])
 
         return assignments[0], assignments[1]
+
+    @staticmethod
+    def vertical(
+        X_train: torch.Tensor,
+        y_train: torch.Tensor,  # not used
+        X_test: Optional[torch.Tensor],
+        y_test: Optional[torch.Tensor],  # not used
+        n: int,
+        feature_splits: Optional[list[list[int]]] = None,  # consumed later in assign()
+        **kwargs,
+    ) -> tuple[list[np.ndarray], list[np.ndarray] | None]:
+        """Assign all samples to all clients (feature partitioning is applied later)."""
+        idx_tr = np.arange(X_train.shape[0], dtype=int)
+        assignments_tr = [idx_tr.copy() for _ in range(n)]
+        if X_test is None:
+            assignments_te = None
+        else:
+            idx_te = np.arange(X_test.shape[0], dtype=int)
+            assignments_te = [idx_te.copy() for _ in range(n)]
+        return assignments_tr, assignments_te
 
     @staticmethod
     def quantity_skew(
@@ -839,6 +910,7 @@ class DataSplitter:
 
     _iidness_functions = {
         "iid": iid,
+        "vertical": vertical,
         "qnt": quantity_skew,
         "lbl_qnt": label_quantity_skew,
         "dir": label_dirichlet_skew,
