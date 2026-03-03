@@ -208,6 +208,10 @@ class FastDataLoader:
         """
         if percentage > 1.0 or percentage <= 0.0:
             raise ValueError("percentage must be in (0, 1]")
+        if self.max_size == 0:
+            self.size = 0
+            return self.size
+
         self.size = max(int(self.tensors[0].shape[0] * percentage), 1)
 
         if self.size < self.max_size:

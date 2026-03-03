@@ -277,6 +277,82 @@ class Datasets:
         )
 
     @classmethod
+    def MEDICAL(
+        cls,
+        path: str = "../data",
+        filename: str = "healthcare_dataset.csv",
+        target_col: str = "Test Results",
+        test_size: float = 0.2,
+        seed: int = 42,
+    ) -> DataContainer:
+        """Load a medical dataset from a local CSV file.
+
+        The loader supports mixed numeric/categorical/date columns by converting
+        non-numeric features to numeric codes and encoding the target labels.
+
+        Args:
+            path (str, optional): Base path where the dataset is stored.
+                Defaults to ``../data``.
+            filename (str, optional): CSV file name inside ``path/medical``.
+                Defaults to ``healthcare_dataset.csv``.
+            target_col (str, optional): Target label column in the CSV.
+                Defaults to ``Test Results``.
+            test_size (float, optional): Test split size. Defaults to 0.2.
+            seed (int, optional): Random seed. Defaults to 42.
+
+        Returns:
+            DataContainer: The medical dataset.
+        """
+        csv_path = os.path.join(path, "medical", filename)
+        df = pd.read_csv(csv_path)
+        if target_col not in df.columns:
+            raise ValueError(
+                f"Medical dataset CSV must include a '{target_col}' column."
+            )
+
+        X_df = df.drop(columns=[target_col]).copy()
+        y_series = df[target_col]
+
+        # Convert all features to numeric while keeping tabular input width stable.
+        for col in X_df.columns:
+            if pd.api.types.is_numeric_dtype(X_df[col]):
+                X_df[col] = pd.to_numeric(X_df[col], errors="raise")
+                continue
+
+            # Parse only date-like columns explicitly to avoid noisy inference warnings.
+            if "date" in col.lower():
+                parsed_dates = pd.to_datetime(X_df[col], format="%Y-%m-%d", errors="coerce")
+            else:
+                parsed_dates = pd.Series([pd.NaT] * len(X_df), index=X_df.index)
+
+            if parsed_dates.notna().all():
+                X_df[col] = parsed_dates.map(pd.Timestamp.toordinal).astype(np.float32)
+            else:
+                X_df[col], _ = pd.factorize(X_df[col], sort=True)
+
+        if pd.api.types.is_numeric_dtype(y_series):
+            y_numeric = pd.to_numeric(y_series, errors="raise")
+            y_codes, _ = pd.factorize(y_numeric, sort=True)
+        else:
+            y_codes, _ = pd.factorize(y_series, sort=True)
+
+        X = X_df.to_numpy(dtype=np.float32)
+        y = y_codes.astype(np.int64)
+        n_classes = int(np.unique(y).size)
+
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=test_size, random_state=seed, stratify=y
+        )
+
+        return DataContainer(
+            torch.tensor(X_train, dtype=torch.float32),
+            torch.tensor(y_train, dtype=torch.long),
+            torch.tensor(X_test, dtype=torch.float32),
+            torch.tensor(y_test, dtype=torch.long),
+            n_classes,
+        )
+
+    @classmethod
     def SVHN(
         cls,
         path: str = "../data",
@@ -968,6 +1044,7 @@ Datasets._DATASET_MAP = {
     "svhn": Datasets.SVHN,
     "mnistm": Datasets.MNISTM,
     "adult": Datasets.ADULT,
+    "medical": Datasets.MEDICAL,
     "femnist": Datasets.FEMNIST,
     "emnist": Datasets.EMNIST,
     "cifar10": Datasets.CIFAR10,

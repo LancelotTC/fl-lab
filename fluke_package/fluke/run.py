@@ -14,7 +14,7 @@ from rich.console import Console
 
 sys.path.append(".")
 
-from . import __version__  # NOQA
+from . import DDict, __version__  # NOQA
 from .config import Configuration, ConfigurationError, OptimizerConfigurator  # NOQA
 from .utils import get_class_from_qualified_name, get_loss, get_model, plot_distribution  # NOQA
 
@@ -22,16 +22,20 @@ console = Console()
 app = typer.Typer()
 
 
-def _maybe_set_input_dim(cfg: Configuration, num_features: int) -> None:
+def _maybe_set_input_dim(
+    cfg: Configuration, num_features: int, num_classes: int | None = None
+) -> None:
     model_name = cfg.method.hyperparameters.model
     if isinstance(model_name, str):
         model_base = model_name.split(".")[-1]
-        if model_base in {"Adult_LogReg", "Adult_SVM", "Adult_MLP"}:
+        if model_base in {"Adult_LogReg", "Adult_SVM", "Adult_MLP", "Medical_SVM"}:
             if "net_args" not in cfg.method.hyperparameters:
                 cfg.method.hyperparameters.net_args = DDict()
             net_args = cfg.method.hyperparameters.net_args
             if "input_dim" not in net_args:
                 net_args["input_dim"] = num_features
+            if num_classes is not None and "output_size" not in net_args:
+                net_args["output_size"] = num_classes
 
 
 def fluke_banner() -> None:
@@ -77,11 +81,7 @@ def centralized(
     cfg = Configuration(exp_cfg, alg_cfg)
     FlukeENV().configure(cfg)
     data_container = Datasets.get(**cfg.data.dataset)
-    _maybe_set_input_dim(cfg, data_container.num_features)
-    _maybe_set_input_dim(cfg, data_container.num_features)
-    _maybe_set_input_dim(cfg, data_container.num_features)
-    _maybe_set_input_dim(cfg, data_container.num_features)
-    _maybe_set_input_dim(cfg, data_container.num_features)
+    _maybe_set_input_dim(cfg, data_container.num_features, data_container.num_classes)
 
     device = FlukeENV().get_device()
     train_loader = FastDataLoader(
@@ -238,7 +238,7 @@ def _run_federation(cfg: Configuration, resume: str | None = None) -> None:
 
     FlukeENV().configure(cfg)
     data_container = Datasets.get(**cfg.data.dataset)
-    _maybe_set_input_dim(cfg, data_container.num_features)
+    _maybe_set_input_dim(cfg, data_container.num_features, data_container.num_classes)
     evaluator = ClassificationEval(
         eval_every=cfg.eval.eval_every, n_classes=data_container.num_classes
     )
@@ -299,7 +299,7 @@ def _run_decentralized(cfg: Configuration) -> None:
 
     FlukeENV().configure(cfg)
     data_container = Datasets.get(**cfg.data.dataset)
-    _maybe_set_input_dim(cfg, data_container.num_features)
+    _maybe_set_input_dim(cfg, data_container.num_features, data_container.num_classes)
     evaluator = ClassificationEval(
         eval_every=cfg.eval.eval_every, n_classes=data_container.num_classes
     )

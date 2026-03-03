@@ -231,7 +231,11 @@ class ClassificationEval(Evaluator):
         if not isinstance(eval_data_loader, list):
             eval_data_loader = [eval_data_loader]
 
+        n_valid_loaders = 0
         for data_loader in eval_data_loader:
+            if data_loader is None or len(data_loader) == 0:
+                continue
+
             for metric in self.metrics.values():
                 metric.reset()
 
@@ -239,7 +243,10 @@ class ClassificationEval(Evaluator):
                 metric.reset()
 
             loss = 0
+            n_batches = 0
             for X, y in data_loader:
+                if X.shape[0] == 0:
+                    continue
                 X, y = X.to(device), y.to(device)
                 with torch.no_grad():
                     y_hat = model(X)
@@ -253,7 +260,13 @@ class ClassificationEval(Evaluator):
                     for metric in additional_metrics.values():
                         metric.update(y_hat.cpu(), y.cpu())
 
-            cnt += len(data_loader)
+                n_batches += 1
+
+            if n_batches == 0:
+                continue
+
+            n_valid_loaders += 1
+            cnt += n_batches
 
             for k, v in self.metrics.items():
                 matrics_values[k].append(v.compute().item())
@@ -262,10 +275,14 @@ class ClassificationEval(Evaluator):
                 for k, v in additional_metrics.items():
                     add_metric_values[k].append(v.compute().item())
 
-            losses.append(loss / cnt)
+            if loss_fn is not None:
+                losses.append(loss / n_batches)
 
         model.to(model_device)
         clear_cuda_cache()
+
+        if n_valid_loaders == 0:
+            return {}
 
         result = {m: np.round(sum(v) / len(v), 5).item() for m, v in matrics_values.items()}
         result.update(

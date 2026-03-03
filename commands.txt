@@ -1,0 +1,4 @@
+
+SVM:
+Lancelot : fluke federation config/medical-data-non-iid.yaml config/fl-config-svm.yaml
+Maïa : fluke federation config/medical-data-iid.yaml config/fl-config-svm.yaml

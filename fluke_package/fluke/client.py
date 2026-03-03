@@ -5,6 +5,7 @@ The module :mod:`fluke.client` provides the base classes for the clients in :mod
 from __future__ import annotations
 
 import sys
+import warnings
 from typing import Any
 
 import torch
@@ -376,6 +377,14 @@ class Client(ObserverSubject):
 
         if self.optimizer is None:
             self.optimizer, self.scheduler = self._optimizer_cfg(self.model)
+
+        if len(self.train_set) == 0:
+            warnings.warn(
+                f"[Client {self.index}] empty local training set. Skipping local update."
+            )
+            self.model.cpu()
+            clear_cuda_cache()
+            return 0.0
 
         running_loss = 0.0
         for _ in range(epochs):
