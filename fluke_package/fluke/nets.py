@@ -577,7 +577,7 @@ class Adult_SVM(nn.Module):
         return self.fc(x)
 
 class Medical_SVM(nn.Module):
-    """Linear SVM-style classifier for tabular datasets like Adult."""
+    """Linear SVM-style classifier for tabular datasets like Medical."""
 
     def __init__(self, input_dim: int | None = None, output_size: int = 2):
         super().__init__()
