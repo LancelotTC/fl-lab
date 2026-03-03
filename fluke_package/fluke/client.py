@@ -372,6 +372,43 @@ class Client(ObserverSubject):
             override_local_epochs if override_local_epochs > 0 else self.hyper_params.local_epochs
         )
 
+        mem_model = self.model
+        if not (hasattr(mem_model, "fit_memory") and callable(getattr(mem_model, "fit_memory"))):
+            if hasattr(mem_model, "_module") and hasattr(mem_model._module, "fit_memory"):
+                mem_model = mem_model._module
+            elif hasattr(mem_model, "module") and hasattr(mem_model.module, "fit_memory"):
+                mem_model = mem_model.module
+
+        if hasattr(mem_model, "fit_memory") and callable(getattr(mem_model, "fit_memory")):
+            self.model.train()
+            self.model.to(self.device)
+
+            if len(self.train_set) == 0:
+                warnings.warn(
+                    f"[Client {self.index}] empty local training set. Skipping local update."
+                )
+                self.model.cpu()
+                clear_cuda_cache()
+                return 0.0
+
+            if "noise_mul" in self.hyper_params and self.hyper_params.noise_mul > 0:
+                warnings.warn(
+                    f"[Client {self.index}] memory-based model does not use gradient updates; "
+                    "DP noise/clipping are not applied in local fitting."
+                )
+
+            if hasattr(mem_model, "reset_memory") and callable(getattr(mem_model, "reset_memory")):
+                mem_model.reset_memory()
+
+            for X, y in self.train_set:
+                if X.shape[0] == 0:
+                    continue
+                mem_model.fit_memory(X.to(self.device), y.to(self.device))
+
+            self.model.cpu()
+            clear_cuda_cache()
+            return 0.0
+
         self.model.train()
         self.model.to(self.device)
 

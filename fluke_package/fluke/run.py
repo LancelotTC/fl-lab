@@ -28,7 +28,13 @@ def _maybe_set_input_dim(
     model_name = cfg.method.hyperparameters.model
     if isinstance(model_name, str):
         model_base = model_name.split(".")[-1]
-        if model_base in {"Adult_LogReg", "Adult_SVM", "Adult_MLP", "Medical_SVM"}:
+        if model_base in {
+            "Adult_LogReg",
+            "Adult_SVM",
+            "Adult_MLP",
+            "Medical_SVM",
+            "Medical_KNN",
+        }:
             if "net_args" not in cfg.method.hyperparameters:
                 cfg.method.hyperparameters.net_args = DDict()
             net_args = cfg.method.hyperparameters.net_args
@@ -80,8 +86,13 @@ def _split_overrides(
     overrides_exp: list[str] = []
     overrides_alg: list[str] = []
     for item in overrides:
-        if item.startswith("method."):
-            overrides_alg.append(item[len("method.") :])
+        plus_prefix_len = len(item) - len(item.lstrip("+"))
+        core = item[plus_prefix_len:]
+
+        if core.startswith("method."):
+            # Accept both method.* and +method.* overrides from the CLI.
+            # For algorithm config we always apply standard override semantics.
+            overrides_alg.append(core[len("method.") :])
         else:
             overrides_exp.append(item)
     return overrides_exp, overrides_alg

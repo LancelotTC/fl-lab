@@ -35,6 +35,8 @@ __all__ = [
     "MNIST_LR",
     "Adult_LogReg",
     "Adult_SVM",
+    "Medical_SVM",
+    "Medical_KNN",
     "Adult_MLP",
     "CifarConv2",
     "CifarConv2_E",
@@ -309,9 +311,7 @@ class MNIST_2NN(EncoderHeadNet):
     """
 
     def __init__(self, hidden_size: tuple[int, int] = (200, 100), softmax: bool = False):
-        super(MNIST_2NN, self).__init__(
-            MNIST_2NN_E(hidden_size), MNIST_2NN_D(hidden_size[1], softmax)
-        )
+        super(MNIST_2NN, self).__init__(MNIST_2NN_E(hidden_size), MNIST_2NN_D(hidden_size[1], softmax))
 
 
 class MNIST_CNN_E(nn.Module):
@@ -563,8 +563,12 @@ class Adult_LogReg(nn.Module):
         return self.fc(x)
 
 
-class Adult_SVM(nn.Module):
-    """Linear SVM-style classifier for tabular datasets like Adult."""
+class _LinearSVM(nn.Module):
+    """Linear multi-class SVM decision function.
+
+    This module intentionally returns raw margins/logits. To train it as a true SVM,
+    use a hinge-style loss such as ``torch.nn.MultiMarginLoss``.
+    """
 
     def __init__(self, input_dim: int | None = None, output_size: int = 2):
         super().__init__()
@@ -575,19 +579,90 @@ class Adult_SVM(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.fc(x)
+
+
+class Adult_SVM(nn.Module):
+    """Linear SVM for Adult-like tabular datasets."""
+
+    def __init__(self, input_dim: int | None = None, output_size: int = 2):
+        super().__init__()
+        self._svm = _LinearSVM(input_dim=input_dim, output_size=output_size)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self._svm(x)
+
 
 class Medical_SVM(nn.Module):
-    """Linear SVM-style classifier for tabular datasets like Medical."""
+    """Linear SVM for Medical tabular datasets."""
 
     def __init__(self, input_dim: int | None = None, output_size: int = 2):
         super().__init__()
-        if input_dim is None:
-            self.fc = nn.LazyLinear(output_size)
-        else:
-            self.fc = nn.Linear(input_dim, output_size)
+        self._svm = _LinearSVM(input_dim=input_dim, output_size=output_size)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.fc(x)
+        return self._svm(x)
+
+
+class Medical_KNN(nn.Module):
+    """Federated-friendly KNN-style classifier for medical tabular data.
+
+    The model stores one centroid per class and predicts using nearest-centroid scores.
+    It exposes ``fit_memory`` so clients can build centroids directly from local data.
+    """
+
+    def __init__(self, input_dim: int | None = None, output_size: int = 2, eps: float = 1e-12):
+        super().__init__()
+        self.output_size = output_size
+        self.eps = eps
+        # Keep one trainable parameter so optimizer-based pipelines can be instantiated.
+        self._dummy = nn.Parameter(torch.zeros(1))
+        d = 0 if input_dim is None else int(input_dim)
+        self.register_buffer("prototypes", torch.zeros(output_size, d))
+        self.register_buffer("counts", torch.zeros(output_size))
+
+    def _ensure_initialized(self, x: torch.Tensor) -> None:
+        if self.prototypes.shape[1] == 0:
+            self.prototypes = torch.zeros(self.output_size, x.shape[1], device=x.device)
+
+    @torch.no_grad()
+    def reset_memory(self) -> None:
+        self.prototypes.zero_()
+        self.counts.zero_()
+
+    @torch.no_grad()
+    def fit_memory(self, x: torch.Tensor, y: torch.Tensor) -> None:
+        self._ensure_initialized(x)
+        x = x.detach().to(self.prototypes.device).float()
+        y = y.detach().to(self.prototypes.device).long().view(-1)
+
+        for cls in y.unique().tolist():
+            cls = int(cls)
+            if cls < 0 or cls >= self.output_size:
+                continue
+
+            mask = y == cls
+            if not mask.any():
+                continue
+
+            n_new = float(mask.sum().item())
+            cls_mean = x[mask].mean(dim=0)
+            n_old = float(self.counts[cls].item())
+            n_tot = n_old + n_new
+
+            updated = (self.prototypes[cls] * n_old + cls_mean * n_new) / max(n_tot, self.eps)
+            self.prototypes[cls].copy_(updated)
+            self.counts[cls].fill_(n_tot)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        self._ensure_initialized(x)
+        x = x.float()
+        prot = self.prototypes.to(x.device)
+
+        dists = ((x[:, None, :] - prot[None, :, :]) ** 2).sum(dim=2)
+        unseen = (self.counts.to(x.device) <= 0).float().view(1, -1)
+        dists = dists + unseen * 1e6
+        return -dists
+
 
 class Adult_MLP(nn.Module):
     """Simple MLP for tabular datasets like Adult."""
@@ -940,9 +1015,7 @@ class VGG9_D(nn.Module):
     """
 
     @classmethod
-    def create_linear_layer(
-        cls, in_features: int, out_features: int, bias: bool = False, seed: int = 0
-    ) -> nn.Linear:
+    def create_linear_layer(cls, in_features: int, out_features: int, bias: bool = False, seed: int = 0) -> nn.Linear:
         fc = nn.Linear(in_features, out_features, bias=bias)
         torch.manual_seed(seed)
         torch.nn.init.xavier_normal_(fc.weight)
@@ -951,13 +1024,9 @@ class VGG9_D(nn.Module):
     def __init__(self, input_size: int = 512, output_size: int = 62, seed: int = 98765):
         super(VGG9_D, self).__init__()
         self.downstream = nn.Sequential(
-            VGG9_D.create_linear_layer(
-                in_features=input_size, out_features=256, bias=False, seed=seed
-            ),
+            VGG9_D.create_linear_layer(in_features=input_size, out_features=256, bias=False, seed=seed),
             nn.ReLU(True),
-            VGG9_D.create_linear_layer(
-                in_features=256, out_features=output_size, bias=False, seed=seed
-            ),
+            VGG9_D.create_linear_layer(in_features=256, out_features=output_size, bias=False, seed=seed),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -981,9 +1050,7 @@ class VGG9(EncoderHeadNet):
     """
 
     def __init__(self, output_size: int = 62, seed: int = 98765):
-        super(VGG9, self).__init__(
-            VGG9_E(seed), VGG9_D(input_size=512, output_size=output_size, seed=seed)
-        )
+        super(VGG9, self).__init__(VGG9_E(seed), VGG9_D(input_size=512, output_size=output_size, seed=seed))
 
 
 # FedAvg: https://arxiv.org/pdf/1602.05629.pdf (CIFAR-10)
@@ -1233,9 +1300,7 @@ class Shakespeare_LSTM_E(nn.Module):
     def __init__(self):
         super(Shakespeare_LSTM_E, self).__init__()
         self.encoder = nn.Embedding(256, 8)
-        self.rnn = nn.LSTM(
-            input_size=8, hidden_size=256, num_layers=2, batch_first=True, bias=False
-        )
+        self.rnn = nn.LSTM(input_size=8, hidden_size=256, num_layers=2, batch_first=True, bias=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.encoder(x)
@@ -1254,9 +1319,7 @@ class Shakespeare_LSTM_D(nn.Module):
     def __init__(self):
         super(Shakespeare_LSTM_D, self).__init__()
         self._output_size = len(string.printable)
-        self.classifier = VGG9_D.create_linear_layer(
-            256, self._output_size, bias=False, seed=FlukeENV().get_seed()
-        )
+        self.classifier = VGG9_D.create_linear_layer(256, self._output_size, bias=False, seed=FlukeENV().get_seed())
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.classifier(x)
