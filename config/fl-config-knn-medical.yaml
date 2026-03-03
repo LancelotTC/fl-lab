@@ -13,7 +13,7 @@ hyperparameters:
             step_size: 1
     model: Medical_KNN
     net_args:
-        input_dim: 14
+        input_dim: 47
     server:
         weighted: true
         lr: 1.0
