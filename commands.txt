@@ -25,7 +25,6 @@ fluke federation config/medical-data-non-iid.yaml config/fl-config-svm-dp.yaml +
 fluke federation config/medical-data-non-iid.yaml config/fl-config-svm-dp.yaml +method.hyperparameters.client.noise_mul=1.0 +method.hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-non-iid-noise-1p0-mgn-1p0
 
 
-fluke federation config/medical-data-vertical.yaml config/fl-config-svm.yaml logger.log_dir=runs/medical-SVM-vertical
 
 
 # Optional: Medical KNN-style (nearest-centroid) baseline
@@ -35,3 +34,10 @@ fluke federation config/medical-data-non-iid.yaml config/fl-config-knn-medical.y
 # Reporting (quality + fairness + cost + DP tradeoff)
 python runs/generate_fl_comparisons.py --dataset medical
 # python runs/run_medical_dp_sweep.py --noise-levels 0.0 0.1 0.3 0.6 1.0 --max-grad-norm 1.0 --rounds 50
+
+
+
+
+fluke federation config/medical-data-vertical-iid.yaml config/fl-config-svm.yaml logger.log_dir=runs/medical-SVM-vertical-iid
+
+fluke federation config/medical-data-vertical-non-iid.yaml config/fl-config-svm.yaml logger.log_dir=runs/medical-SVM-vertical-non-iid

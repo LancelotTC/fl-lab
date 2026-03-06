@@ -436,7 +436,7 @@ class DataSplitter:
         client_tr_assignments = []
         client_te_assignments = []
         vfl_feature_splits = None
-        if self.distribution == "vertical":
+        if self.distribution.startswith("vertical"):
             vfl_feature_splits = self._resolve_vertical_feature_splits(client_Xtr, n_clients)
 
         for c in range(n_clients):
@@ -586,6 +586,52 @@ class DataSplitter:
             idx_te = np.arange(X_test.shape[0], dtype=int)
             assignments_te = [idx_te.copy() for _ in range(n)]
         return assignments_tr, assignments_te
+
+    @staticmethod
+    def vertical_iid(
+        X_train: torch.Tensor,
+        y_train: torch.Tensor,  # not used
+        X_test: Optional[torch.Tensor],
+        y_test: Optional[torch.Tensor],  # not used
+        n: int,
+        feature_splits: Optional[list[list[int]]] = None,  # consumed later in assign()
+        **kwargs,
+    ) -> tuple[list[np.ndarray], list[np.ndarray] | None]:
+        """Alias of ``vertical`` for explicit IID naming in configs."""
+        return DataSplitter.vertical(
+            X_train=X_train,
+            y_train=y_train,
+            X_test=X_test,
+            y_test=y_test,
+            n=n,
+            feature_splits=feature_splits,
+            **kwargs,
+        )
+
+    @staticmethod
+    def vertical_dir(
+        X_train: torch.Tensor,
+        y_train: torch.Tensor,
+        X_test: Optional[torch.Tensor],
+        y_test: Optional[torch.Tensor],
+        n: int,
+        beta: float = 0.1,
+        min_ex_class: int = 2,
+        balanced: bool = False,
+        feature_splits: Optional[list[list[int]]] = None,  # consumed later in assign()
+        **kwargs,
+    ) -> tuple[list[np.ndarray], list[np.ndarray] | None]:
+        """Dirichlet non-IID sample assignment + vertical feature masking."""
+        return DataSplitter.label_dirichlet_skew(
+            X_train=X_train,
+            y_train=y_train,
+            X_test=X_test,
+            y_test=y_test,
+            n=n,
+            beta=beta,
+            min_ex_class=min_ex_class,
+            balanced=balanced,
+        )
 
     @staticmethod
     def quantity_skew(
@@ -911,6 +957,8 @@ class DataSplitter:
     _iidness_functions = {
         "iid": iid,
         "vertical": vertical,
+        "vertical_iid": vertical_iid,
+        "vertical_dir": vertical_dir,
         "qnt": quantity_skew,
         "lbl_qnt": label_quantity_skew,
         "dir": label_dirichlet_skew,
