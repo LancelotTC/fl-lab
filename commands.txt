@@ -33,6 +33,7 @@ fluke federation config/medical-data-non-iid.yaml config/fl-config-knn-medical.y
 
 # Reporting (quality + fairness + cost + DP tradeoff)
 python runs/generate_fl_comparisons.py --dataset medical
+python runs/plot_iid_noise_progression.py --dataset medical --noise-levels 0 0.3 0.6 1
 # python runs/run_medical_dp_sweep.py --noise-levels 0.0 0.1 0.3 0.6 1.0 --max-grad-norm 1.0 --rounds 50
 
 

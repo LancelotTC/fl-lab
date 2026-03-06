@@ -18,5 +18,5 @@ hyperparameters:
         input_dim: 23
     server:
         weighted: true
-        lr: 1.0
+        lr: 0.001
 name: fluke.algorithms.dpfedavg.DPFedAVG

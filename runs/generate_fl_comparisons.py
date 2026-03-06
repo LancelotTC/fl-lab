@@ -82,6 +82,12 @@ class RunRecord:
     fairness_final_macro_f1_mean: Optional[float]
     fairness_final_macro_f1_std: Optional[float]
     fairness_final_macro_f1_gap: Optional[float]
+    fairness_final_spd_mean: Optional[float]
+    fairness_final_spd_std: Optional[float]
+    fairness_final_spd_gap: Optional[float]
+    fairness_final_eod_mean: Optional[float]
+    fairness_final_eod_std: Optional[float]
+    fairness_final_eod_gap: Optional[float]
     run_time_seconds: Optional[float]
     total_comm_cost: Optional[float]
     comm_cost_per_round: Optional[float]
@@ -102,6 +108,13 @@ def to_float_or_none(value: object) -> Optional[float]:
 
 def tokenize(name: str) -> list[str]:
     return [t for t in re.split(r"[^a-z0-9]+", name.lower()) if t]
+
+
+def first_existing_col(df: pd.DataFrame, candidates: tuple[str, ...]) -> Optional[str]:
+    for c in candidates:
+        if c in df.columns:
+            return c
+    return None
 
 
 def infer_dataset(name: str) -> str:
@@ -226,6 +239,12 @@ def compute_fairness_from_locals(run_dir: Path) -> tuple[dict[str, Optional[floa
         "fairness_final_macro_f1_mean": None,
         "fairness_final_macro_f1_std": None,
         "fairness_final_macro_f1_gap": None,
+        "fairness_final_spd_mean": None,
+        "fairness_final_spd_std": None,
+        "fairness_final_spd_gap": None,
+        "fairness_final_eod_mean": None,
+        "fairness_final_eod_std": None,
+        "fairness_final_eod_gap": None,
     }
     if not locals_path.exists():
         return defaults, None
@@ -235,7 +254,23 @@ def compute_fairness_from_locals(run_dir: Path) -> tuple[dict[str, Optional[floa
         return defaults, None
 
     metric_cols = [c for c in ("accuracy", "macro_f1") if c in df.columns]
-    if not metric_cols:
+    spd_col = first_existing_col(
+        df,
+        (
+            "statistical_parity_difference",
+            "statistical_parity_diff",
+            "spd",
+        ),
+    )
+    eod_col = first_existing_col(
+        df,
+        (
+            "equal_opportunity_difference",
+            "equal_opportunity_diff",
+            "eod",
+        ),
+    )
+    if not metric_cols and spd_col is None and eod_col is None:
         return defaults, None
 
     by_round = []
@@ -254,6 +289,18 @@ def compute_fairness_from_locals(run_dir: Path) -> tuple[dict[str, Optional[floa
                 row["macro_f1_mean"] = float(f1.mean())
                 row["macro_f1_std"] = float(f1.std(ddof=0))
                 row["macro_f1_gap"] = float(f1.max() - f1.min())
+        if spd_col is not None:
+            spd = grp[spd_col].dropna().to_numpy(dtype=float)
+            if spd.size > 0:
+                row["spd_mean"] = float(spd.mean())
+                row["spd_std"] = float(spd.std(ddof=0))
+                row["spd_gap"] = float(spd.max() - spd.min())
+        if eod_col is not None:
+            eod = grp[eod_col].dropna().to_numpy(dtype=float)
+            if eod.size > 0:
+                row["eod_mean"] = float(eod.mean())
+                row["eod_std"] = float(eod.std(ddof=0))
+                row["eod_gap"] = float(eod.max() - eod.min())
         by_round.append(row)
 
     fairness_by_round = pd.DataFrame(by_round).sort_values("round")
@@ -269,6 +316,12 @@ def compute_fairness_from_locals(run_dir: Path) -> tuple[dict[str, Optional[floa
         "fairness_final_macro_f1_mean": to_float_or_none(last.get("macro_f1_mean")),
         "fairness_final_macro_f1_std": to_float_or_none(last.get("macro_f1_std")),
         "fairness_final_macro_f1_gap": to_float_or_none(last.get("macro_f1_gap")),
+        "fairness_final_spd_mean": to_float_or_none(last.get("spd_mean")),
+        "fairness_final_spd_std": to_float_or_none(last.get("spd_std")),
+        "fairness_final_spd_gap": to_float_or_none(last.get("spd_gap")),
+        "fairness_final_eod_mean": to_float_or_none(last.get("eod_mean")),
+        "fairness_final_eod_std": to_float_or_none(last.get("eod_std")),
+        "fairness_final_eod_gap": to_float_or_none(last.get("eod_gap")),
     }
     return result, fairness_by_round
 
@@ -318,6 +371,48 @@ def compute_client_quality_from_locals(
     return result, client_by_round
 
 
+def read_round_loss(run_dir: Path) -> Optional[pd.DataFrame]:
+    global_path = run_dir / GLOBAL_METRICS_FILE
+    if global_path.exists():
+        gdf = pd.read_csv(global_path)
+        if "loss" in gdf.columns and not gdf.empty:
+            if "round" not in gdf.columns:
+                gdf["round"] = np.arange(1, len(gdf) + 1)
+            out = gdf[["round", "loss"]].dropna()
+            if not out.empty:
+                out["round"] = out["round"].astype(int)
+                return out.sort_values("round")
+
+    sources = [
+        (run_dir / "metrics.csv", ("train_loss", "loss", "fit_loss", "client_loss")),
+        (run_dir / "local_test_metrics.csv", ("loss",)),
+        (run_dir / "postfit_metrics.csv", ("loss",)),
+        (run_dir / "prefit_metrics.csv", ("loss",)),
+        (run_dir / LOCALS_METRICS_FILE, ("loss",)),
+    ]
+    for path, cols in sources:
+        if not path.exists():
+            continue
+        df = pd.read_csv(path)
+        if df.empty or "round" not in df.columns:
+            continue
+        col = first_existing_col(df, cols)
+        if col is None:
+            continue
+        sdf = df[["round", col] + (["client"] if "client" in df.columns else [])].dropna()
+        if sdf.empty:
+            continue
+        if "client" in sdf.columns:
+            sdf = sdf.groupby("round", as_index=False)[col].mean()
+        else:
+            sdf = sdf[["round", col]]
+        sdf = sdf.rename(columns={col: "loss"})
+        sdf["round"] = sdf["round"].astype(int)
+        return sdf.sort_values("round")
+
+    return None
+
+
 def parse_run(
     run_dir: Path, runs_dir: Path
 ) -> tuple[RunRecord, pd.DataFrame, Optional[pd.DataFrame], Optional[pd.DataFrame]]:
@@ -329,6 +424,11 @@ def parse_run(
     if "round" not in gdf.columns:
         gdf["round"] = np.arange(1, len(gdf) + 1)
     gdf = gdf.sort_values("round").reset_index(drop=True)
+
+    if "loss" not in gdf.columns:
+        loss_by_round = read_round_loss(run_dir)
+        if loss_by_round is not None and not loss_by_round.empty:
+            gdf = gdf.merge(loss_by_round, on="round", how="left")
 
     final = gdf.iloc[-1]
     final_round = int(final["round"])
@@ -391,6 +491,12 @@ def parse_run(
         fairness_final_macro_f1_mean=fairness["fairness_final_macro_f1_mean"],
         fairness_final_macro_f1_std=fairness["fairness_final_macro_f1_std"],
         fairness_final_macro_f1_gap=fairness["fairness_final_macro_f1_gap"],
+        fairness_final_spd_mean=fairness["fairness_final_spd_mean"],
+        fairness_final_spd_std=fairness["fairness_final_spd_std"],
+        fairness_final_spd_gap=fairness["fairness_final_spd_gap"],
+        fairness_final_eod_mean=fairness["fairness_final_eod_mean"],
+        fairness_final_eod_std=fairness["fairness_final_eod_std"],
+        fairness_final_eod_gap=fairness["fairness_final_eod_gap"],
         run_time_seconds=run_time_seconds,
         total_comm_cost=total_comm_cost,
         comm_cost_per_round=comm_cost_per_round,
@@ -588,6 +694,25 @@ def main() -> int:
         quality_series,
     )
 
+    # Utility plot: loss by round (server loss if available, otherwise train/client mean loss).
+    loss_series = []
+    for r in records:
+        run_slice = roundwise_df[roundwise_df["run_label"] == r.run_label]
+        if run_slice.empty or "loss" not in run_slice.columns:
+            continue
+        s = run_slice.dropna(subset=["round", "loss"]).sort_values("round")
+        if s.empty:
+            continue
+        loss_series.append(
+            (r.run_label, s["round"].to_numpy(dtype=float), s["loss"].to_numpy(dtype=float))
+        )
+    make_line_plot(
+        out_dir / "utility_loss_vs_round.png",
+        "Loss vs Round",
+        "loss",
+        loss_series,
+    )
+
     # Client quality plot: average across clients by round.
     client_quality_series = []
     if not client_roundwise_df.empty:
@@ -691,6 +816,46 @@ def main() -> int:
         fairness_series,
     )
 
+    spd_series = []
+    if not fairness_df.empty and "spd_mean" in fairness_df.columns:
+        for r in records:
+            s = (
+                fairness_df[fairness_df["run_label"] == r.run_label]
+                .dropna(subset=["round", "spd_mean"])
+                .sort_values("round")
+            )
+            if s.empty:
+                continue
+            spd_series.append(
+                (r.run_label, s["round"].to_numpy(dtype=float), s["spd_mean"].to_numpy(dtype=float))
+            )
+    make_line_plot(
+        out_dir / "fairness_spd_vs_round.png",
+        "Statistical Parity Difference vs Round",
+        "SPD (mean across clients)",
+        spd_series,
+    )
+
+    eod_series = []
+    if not fairness_df.empty and "eod_mean" in fairness_df.columns:
+        for r in records:
+            s = (
+                fairness_df[fairness_df["run_label"] == r.run_label]
+                .dropna(subset=["round", "eod_mean"])
+                .sort_values("round")
+            )
+            if s.empty:
+                continue
+            eod_series.append(
+                (r.run_label, s["round"].to_numpy(dtype=float), s["eod_mean"].to_numpy(dtype=float))
+            )
+    make_line_plot(
+        out_dir / "fairness_eod_vs_round.png",
+        "Equal Opportunity Difference vs Round",
+        "EOD (mean across clients)",
+        eod_series,
+    )
+
     # Bar charts for final values.
     labels = summary_df["run_label"].tolist()
     if "final_macro_f1" in summary_df.columns:
@@ -711,6 +876,24 @@ def main() -> int:
             "final fairness acc gap",
             labels,
             [0.0 if pd.isna(v) else float(v) for v in summary_df["fairness_final_acc_gap"].tolist()],
+        )
+
+    if "fairness_final_spd_mean" in summary_df.columns and any(pd.notna(v) for v in summary_df["fairness_final_spd_mean"].tolist()):
+        make_bar_plot(
+            out_dir / "final_fairness_spd_bar.png",
+            "Final Statistical Parity Difference by Run",
+            "final SPD",
+            labels,
+            [0.0 if pd.isna(v) else float(v) for v in summary_df["fairness_final_spd_mean"].tolist()],
+        )
+
+    if "fairness_final_eod_mean" in summary_df.columns and any(pd.notna(v) for v in summary_df["fairness_final_eod_mean"].tolist()):
+        make_bar_plot(
+            out_dir / "final_fairness_eod_bar.png",
+            "Final Equal Opportunity Difference by Run",
+            "final EOD",
+            labels,
+            [0.0 if pd.isna(v) else float(v) for v in summary_df["fairness_final_eod_mean"].tolist()],
         )
 
     runtime_vals = summary_df["run_time_seconds"].tolist()

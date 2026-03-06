@@ -597,6 +597,14 @@ class CsvLog(Log):
         if "log_dir" not in self._config:
             self._config["log_dir"] = "./runs"
 
+    def end_fit(self, round: int, client_id: int, model: Module, loss: float, **kwargs) -> None:
+        # Persist per-client local training loss so round-wise loss plots can be generated later.
+        try:
+            self.add_scalar(f"Client[{client_id}].train_loss", float(loss), round)
+        except (TypeError, ValueError):
+            pass
+        return super().end_fit(round, client_id, model, loss, **kwargs)
+
     def _collect_metric_keys(self, data_by_round: dict, include_client: bool) -> list[str]:
         keys: list[str] = []
         seen: set[str] = set()
