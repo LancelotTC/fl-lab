@@ -5,3 +5,5 @@ plots/
 *.pyc
 tempCodeRunnerFile.*
 start.cmd
+
+test.py

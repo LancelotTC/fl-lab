@@ -36,8 +36,6 @@ python runs/generate_fl_comparisons.py --dataset medical
 # python runs/run_medical_dp_sweep.py --noise-levels 0.0 0.1 0.3 0.6 1.0 --max-grad-norm 1.0 --rounds 50
 
 
-
-
 fluke federation config/medical-data-vertical-iid.yaml config/fl-config-svm.yaml logger.log_dir=runs/medical-SVM-vertical-iid
 
 fluke federation config/medical-data-vertical-non-iid.yaml config/fl-config-svm.yaml logger.log_dir=runs/medical-SVM-vertical-non-iid
