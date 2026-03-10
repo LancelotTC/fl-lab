@@ -1,11 +1,11 @@
-"""Plot FL round-wise metric progression by IID-ness and DP noise level.
+"""Plot FL round-wise metric progression by IID-ness and DP privacy level.
 
-Generates one chart per (iidness, metric), with all selected noise levels
+Generates one chart per (iidness, metric), with all selected privacy levels
 overlaid as separate lines.
 
 Expected run folders include tags in the name:
 - `iid` or `non-iid`
-- `noise-<value>` (e.g. noise-0p3 or noise-0.3)
+- `eps-<value>` / `epsilon-<value>` or legacy `noise-<value>`
 """
 
 from __future__ import annotations
@@ -42,14 +42,21 @@ def first_existing_col(df: pd.DataFrame, candidates: tuple[str, ...]) -> str | N
     return None
 
 
-def parse_noise(name: str) -> float | None:
-    m = re.search(r"noise[._-]?([0-9]+p[0-9]+|[0-9]+(?:\.[0-9]+)?)", name.lower())
-    if not m:
-        return None
-    try:
-        return float(m.group(1).replace("p", "."))
-    except ValueError:
-        return None
+def parse_privacy_level(name: str) -> float | None:
+    patterns = (
+        r"epsilon[._-]?([0-9]+p[0-9]+|[0-9]+(?:\.[0-9]+)?)",
+        r"eps[._-]?([0-9]+p[0-9]+|[0-9]+(?:\.[0-9]+)?)",
+        r"noise[._-]?([0-9]+p[0-9]+|[0-9]+(?:\.[0-9]+)?)",
+    )
+    for pattern in patterns:
+        m = re.search(pattern, name.lower())
+        if not m:
+            continue
+        try:
+            return float(m.group(1).replace("p", "."))
+        except ValueError:
+            return None
+    return None
 
 
 def parse_iidness(name: str) -> str | None:
@@ -116,7 +123,7 @@ def load_round_metric_series(run_dir: Path, metric_col: str) -> pd.DataFrame | N
 def aggregate_runs_for_metric(
     runs_dir: Path,
     metric_col: str,
-    noise_levels: list[float],
+    privacy_levels: list[float],
     dataset_filter: str,
 ) -> dict[tuple[str, float], pd.DataFrame]:
     series_by_key: dict[tuple[str, float], list[pd.DataFrame]] = {}
@@ -130,17 +137,17 @@ def aggregate_runs_for_metric(
             continue
 
         iidness = parse_iidness(name)
-        noise = parse_noise(name)
-        if iidness is None or noise is None:
+        privacy_level = parse_privacy_level(name)
+        if iidness is None or privacy_level is None:
             continue
-        if not is_close_to_any(noise, noise_levels):
+        if not is_close_to_any(privacy_level, privacy_levels):
             continue
 
         sdf = load_round_metric_series(d, metric_col)
         if sdf is None or sdf.empty:
             continue
 
-        key = (iidness, noise)
+        key = (iidness, privacy_level)
         series_by_key.setdefault(key, []).append(sdf)
 
     aggregated: dict[tuple[str, float], pd.DataFrame] = {}
@@ -158,21 +165,22 @@ def plot_metric_for_iidness(
     y_label: str,
     metric_col: str,
     aggregated: dict[tuple[str, float], pd.DataFrame],
-    noise_levels: list[float],
+    privacy_levels: list[float],
     iidness: str,
+    privacy_label: str,
 ) -> bool:
     if not aggregated:
         return False
 
     colors = {
-        noise: plt.cm.viridis(i / max(1, len(noise_levels) - 1))
-        for i, noise in enumerate(sorted(noise_levels))
+        privacy_level: plt.cm.viridis(i / max(1, len(privacy_levels) - 1))
+        for i, privacy_level in enumerate(sorted(privacy_levels))
     }
 
     plt.figure(figsize=(11, 6))
     plotted = 0
-    for noise in sorted(noise_levels):
-        key = (iidness, noise)
+    for privacy_level in sorted(privacy_levels):
+        key = (iidness, privacy_level)
         if key not in aggregated:
             continue
         s = aggregated[key]
@@ -181,8 +189,8 @@ def plot_metric_for_iidness(
         plt.plot(
             s["round"].to_numpy(dtype=float),
             s[metric_col].to_numpy(dtype=float),
-            label=f"noise={noise:g}",
-            color=colors[noise],
+            label=f"{privacy_label}={privacy_level:g}",
+            color=colors[privacy_level],
             linestyle="-",
             linewidth=1.9,
         )
@@ -206,7 +214,7 @@ def plot_metric_for_iidness(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Plot metric progression by IID-ness and noise level."
+        description="Plot metric progression by IID-ness and DP privacy level."
     )
     parser.add_argument(
         "--runs-dir",
@@ -227,11 +235,18 @@ def parse_args() -> argparse.Namespace:
         help="Dataset substring filter in run folder names (default: medical).",
     )
     parser.add_argument(
+        "--epsilon-levels",
+        type=float,
+        nargs="+",
+        default=[1.0, 3.0, 6.0, 8.0, 10.0],
+        help="Epsilon levels to include.",
+    )
+    parser.add_argument(
         "--noise-levels",
         type=float,
         nargs="+",
-        default=[0.0, 0.3, 0.6, 1.0],
-        help="Noise levels to include.",
+        default=None,
+        help="Legacy alias for old run names using noise levels.",
     )
     return parser.parse_args()
 
@@ -241,6 +256,8 @@ def main() -> int:
     runs_dir = args.runs_dir.resolve()
     out_dir = args.out_dir.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+    privacy_levels = args.epsilon_levels if args.noise_levels is None else args.noise_levels
+    privacy_label = "epsilon" if args.noise_levels is None else "noise"
 
     wrote_any = False
     roundwise_rows: list[pd.DataFrame] = []
@@ -251,7 +268,7 @@ def main() -> int:
         aggregated = aggregate_runs_for_metric(
             runs_dir=runs_dir,
             metric_col=metric_col,
-            noise_levels=args.noise_levels,
+            privacy_levels=privacy_levels,
             dataset_filter=args.dataset,
         )
         if not aggregated:
@@ -259,11 +276,12 @@ def main() -> int:
             continue
 
         # Save roundwise data used for plotting.
-        for (iidness, noise), df in aggregated.items():
+        for (iidness, privacy_level), df in aggregated.items():
             tmp = df.copy()
             tmp["metric"] = metric_col
             tmp["iidness"] = iidness
-            tmp["noise"] = noise
+            tmp["privacy_level"] = privacy_level
+            tmp["privacy_label"] = privacy_label
             roundwise_rows.append(tmp)
 
         for iidness in ("iid", "non-iid"):
@@ -275,20 +293,21 @@ def main() -> int:
                 y_label=metric_plot_label,
                 metric_col=metric_col,
                 aggregated=aggregated,
-                noise_levels=args.noise_levels,
+                privacy_levels=privacy_levels,
                 iidness=iidness,
+                privacy_label=privacy_label,
             )
             if ok:
                 wrote_any = True
                 print(f"Wrote plot: {out_path}")
 
     if roundwise_rows:
-        out_csv = out_dir / "roundwise_iid_noise_metrics.csv"
+        out_csv = out_dir / "roundwise_iid_privacy_metrics.csv"
         pd.concat(roundwise_rows, ignore_index=True).to_csv(out_csv, index=False)
         print(f"Wrote CSV: {out_csv}")
 
     if not wrote_any:
-        print("No plots were generated. Check run names, metric availability, and noise levels.")
+        print("No plots were generated. Check run names, metric availability, and privacy levels.")
         return 1
     return 0
 
