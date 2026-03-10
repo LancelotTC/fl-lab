@@ -15,7 +15,7 @@ eval:
     eval_every: 1
     locals: true
     post_fit: true
-    pre_fit: true
+    pre_fit: false
     server: true
     task: classification
 exp:
