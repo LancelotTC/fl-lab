@@ -1,5 +1,6 @@
 """`fluke` command line interface."""
 
+import math
 import os
 import sys
 import time
@@ -43,6 +44,25 @@ def _maybe_set_input_dim(
                 net_args["input_dim"] = num_features
             if num_classes is not None and "output_size" not in net_args:
                 net_args["output_size"] = num_classes
+
+
+def _maybe_configure_dp_privacy_budget(cfg: Configuration, train_examples: int) -> None:
+    method_name = cfg.method.name
+    if not isinstance(method_name, str) or not method_name.endswith('DPFedAVG'):
+        return
+
+    client_hp = cfg.method.hyperparameters.client
+    if 'target_epsilon' not in client_hp:
+        return
+
+    if 'target_delta' not in client_hp:
+        client_hp['target_delta'] = 1.0 / max(int(train_examples), 1)
+
+    if 'dp_total_epochs' not in client_hp:
+        planned_epochs = math.ceil(
+            cfg.protocol.n_rounds * cfg.protocol.eligible_perc * client_hp.local_epochs
+        )
+        client_hp['dp_total_epochs'] = max(1, int(planned_epochs))
 
 
 def fluke_banner() -> None:
@@ -275,6 +295,7 @@ def _run_federation(cfg: Configuration, resume: str | None = None) -> None:
     FlukeENV().configure(cfg)
     data_container = Datasets.get(**cfg.data.dataset)
     _maybe_set_input_dim(cfg, data_container.num_features, data_container.num_classes)
+    _maybe_configure_dp_privacy_budget(cfg, data_container.train[0].shape[0])
     evaluator = ClassificationEval(
         eval_every=cfg.eval.eval_every, n_classes=data_container.num_classes
     )

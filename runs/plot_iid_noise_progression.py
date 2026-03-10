@@ -1,11 +1,11 @@
-"""Plot FL round-wise metric progression by IID-ness and DP noise level.
+"""Plot FL round-wise metric progression by IID-ness and DP epsilon level.
 
-Generates one chart per (iidness, metric), with all selected noise levels
+Generates one chart per (iidness, metric), with all selected epsilon levels
 overlaid as separate lines.
 
 Expected run folders include tags in the name:
 - `iid` or `non-iid`
-- `noise-<value>` (e.g. noise-0p3 or noise-0.3)
+- `eps-<value>` (e.g. eps-100p0 or eps-100.0)
 """
 
 from __future__ import annotations
@@ -42,8 +42,8 @@ def first_existing_col(df: pd.DataFrame, candidates: tuple[str, ...]) -> str | N
     return None
 
 
-def parse_noise(name: str) -> float | None:
-    m = re.search(r"noise[._-]?([0-9]+p[0-9]+|[0-9]+(?:\.[0-9]+)?)", name.lower())
+def parse_epsilon(name: str) -> float | None:
+    m = re.search(r"eps[._-]?([0-9]+p[0-9]+|[0-9]+(?:\.[0-9]+)?)", name.lower())
     if not m:
         return None
     try:
@@ -81,7 +81,6 @@ def load_round_metric_series(run_dir: Path, metric_col: str) -> pd.DataFrame | N
     if metric_col != "loss":
         return None
 
-    # Fallback for loss evolution when global_metrics.csv has no loss column.
     fallback_sources: list[tuple[str, tuple[str, ...]]] = [
         ("metrics.csv", ("train_loss", "loss", "fit_loss", "client_loss")),
         ("local_test_metrics.csv", ("loss",)),
@@ -116,7 +115,7 @@ def load_round_metric_series(run_dir: Path, metric_col: str) -> pd.DataFrame | N
 def aggregate_runs_for_metric(
     runs_dir: Path,
     metric_col: str,
-    noise_levels: list[float],
+    epsilon_levels: list[float],
     dataset_filter: str,
 ) -> dict[tuple[str, float], pd.DataFrame]:
     series_by_key: dict[tuple[str, float], list[pd.DataFrame]] = {}
@@ -130,17 +129,17 @@ def aggregate_runs_for_metric(
             continue
 
         iidness = parse_iidness(name)
-        noise = parse_noise(name)
-        if iidness is None or noise is None:
+        epsilon = parse_epsilon(name)
+        if iidness is None or epsilon is None:
             continue
-        if not is_close_to_any(noise, noise_levels):
+        if not is_close_to_any(epsilon, epsilon_levels):
             continue
 
         sdf = load_round_metric_series(d, metric_col)
         if sdf is None or sdf.empty:
             continue
 
-        key = (iidness, noise)
+        key = (iidness, epsilon)
         series_by_key.setdefault(key, []).append(sdf)
 
     aggregated: dict[tuple[str, float], pd.DataFrame] = {}
@@ -158,21 +157,21 @@ def plot_metric_for_iidness(
     y_label: str,
     metric_col: str,
     aggregated: dict[tuple[str, float], pd.DataFrame],
-    noise_levels: list[float],
+    epsilon_levels: list[float],
     iidness: str,
 ) -> bool:
     if not aggregated:
         return False
 
     colors = {
-        noise: plt.cm.viridis(i / max(1, len(noise_levels) - 1))
-        for i, noise in enumerate(sorted(noise_levels))
+        epsilon: plt.cm.viridis(i / max(1, len(epsilon_levels) - 1))
+        for i, epsilon in enumerate(sorted(epsilon_levels))
     }
 
     plt.figure(figsize=(11, 6))
     plotted = 0
-    for noise in sorted(noise_levels):
-        key = (iidness, noise)
+    for epsilon in sorted(epsilon_levels):
+        key = (iidness, epsilon)
         if key not in aggregated:
             continue
         s = aggregated[key]
@@ -181,8 +180,8 @@ def plot_metric_for_iidness(
         plt.plot(
             s["round"].to_numpy(dtype=float),
             s[metric_col].to_numpy(dtype=float),
-            label=f"noise={noise:g}",
-            color=colors[noise],
+            label=f"epsilon={epsilon:g}",
+            color=colors[epsilon],
             linestyle="-",
             linewidth=1.9,
         )
@@ -206,7 +205,7 @@ def plot_metric_for_iidness(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Plot metric progression by IID-ness and noise level."
+        description="Plot metric progression by IID-ness and epsilon level."
     )
     parser.add_argument(
         "--runs-dir",
@@ -217,7 +216,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--out-dir",
         type=Path,
-        default=Path(__file__).resolve().parent / "plots" / "iid_noise_progression",
+        default=Path(__file__).resolve().parent / "plots" / "iid_epsilon_progression",
         help="Output directory for plots and CSVs.",
     )
     parser.add_argument(
@@ -227,11 +226,11 @@ def parse_args() -> argparse.Namespace:
         help="Dataset substring filter in run folder names (default: medical).",
     )
     parser.add_argument(
-        "--noise-levels",
+        "--epsilon-levels",
         type=float,
         nargs="+",
-        default=[0.0, 0.3, 0.6, 1.0],
-        help="Noise levels to include.",
+        default=[10.0, 50.0, 100.0, 250.0, 500.0],
+        help="Epsilon levels to include.",
     )
     return parser.parse_args()
 
@@ -251,19 +250,18 @@ def main() -> int:
         aggregated = aggregate_runs_for_metric(
             runs_dir=runs_dir,
             metric_col=metric_col,
-            noise_levels=args.noise_levels,
+            epsilon_levels=args.epsilon_levels,
             dataset_filter=args.dataset,
         )
         if not aggregated:
             print(f"Skip {metric_col}: no matching runs or metric column.")
             continue
 
-        # Save roundwise data used for plotting.
-        for (iidness, noise), df in aggregated.items():
+        for (iidness, epsilon), df in aggregated.items():
             tmp = df.copy()
             tmp["metric"] = metric_col
             tmp["iidness"] = iidness
-            tmp["noise"] = noise
+            tmp["epsilon"] = epsilon
             roundwise_rows.append(tmp)
 
         for iidness in ("iid", "non-iid"):
@@ -275,7 +273,7 @@ def main() -> int:
                 y_label=metric_plot_label,
                 metric_col=metric_col,
                 aggregated=aggregated,
-                noise_levels=args.noise_levels,
+                epsilon_levels=args.epsilon_levels,
                 iidness=iidness,
             )
             if ok:
@@ -283,12 +281,12 @@ def main() -> int:
                 print(f"Wrote plot: {out_path}")
 
     if roundwise_rows:
-        out_csv = out_dir / "roundwise_iid_noise_metrics.csv"
+        out_csv = out_dir / "roundwise_iid_epsilon_metrics.csv"
         pd.concat(roundwise_rows, ignore_index=True).to_csv(out_csv, index=False)
         print(f"Wrote CSV: {out_csv}")
 
     if not wrote_any:
-        print("No plots were generated. Check run names, metric availability, and noise levels.")
+        print("No plots were generated. Check run names, metric availability, and epsilon levels.")
         return 1
     return 0
 

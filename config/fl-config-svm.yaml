@@ -1,7 +1,7 @@
 hyperparameters:
     client:
-        batch_size: 64
-        local_epochs: 10
+        batch_size: 256
+        local_epochs: 7
         loss: MultiMarginLoss
         optimizer:
             lr: 0.001
