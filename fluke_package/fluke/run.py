@@ -34,6 +34,7 @@ def _maybe_set_input_dim(
             "Adult_MLP",
             "Medical_SVM",
             "Medical_KNN",
+            "Medical_ResMLP",
         }:
             if "net_args" not in cfg.method.hyperparameters:
                 cfg.method.hyperparameters.net_args = DDict()

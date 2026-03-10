@@ -16,10 +16,11 @@ sys.path.append("..")
 
 from fluke.nets import EncoderGlobalHeadLocalNet  # NOQA
 from fluke.nets import (FEMNIST_CNN, MNIST_2NN, MNIST_CNN, MNIST_LR,  # NOQA
-                        VGG9, CifarConv2, FedAVGCNN, FedBN_CNN,
+                        Medical_ResMLP, VGG9, CifarConv2, FedAVGCNN, FedBN_CNN,
                         HeadGlobalEncoderLocalNet, LeNet5, MoonCNN, ResNet9,
                         ResNet18, ResNet18GN, ResNet34, ResNet50,
                         Shakespeare_LSTM)
+from fluke.utils import get_model  # NOQA
 
 
 def test_mnist_2nn():
@@ -51,6 +52,17 @@ def test_mnist_lr():
 
     assert y.shape == (1, 10)
     assert torch.allclose(y.sum(), torch.tensor(1.0))
+
+
+def test_medical_resmlp():
+    model = Medical_ResMLP(input_dim=23, output_size=2)
+    x = torch.randn(4, 23)
+    y = model(x)
+    assert y.shape == (4, 2)
+
+    lazy_model = get_model('Medical_ResMLP')
+    y_lazy = lazy_model(x)
+    assert y_lazy.shape == (4, 2)
 
 
 def test_convnets():

@@ -37,6 +37,7 @@ __all__ = [
     "Adult_SVM",
     "Medical_SVM",
     "Medical_KNN",
+    "Medical_ResMLP",
     "Adult_MLP",
     "CifarConv2",
     "CifarConv2_E",
@@ -662,6 +663,58 @@ class Medical_KNN(nn.Module):
         unseen = (self.counts.to(x.device) <= 0).float().view(1, -1)
         dists = dists + unseen * 1e6
         return -dists
+
+
+class _TabularResidualBlock(nn.Module):
+
+    def __init__(self, width: int, dropout: float = 0.1):
+        super().__init__()
+        self.block = nn.Sequential(
+            nn.LayerNorm(width),
+            nn.Linear(width, width),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(width, width),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x + self.block(x)
+
+
+class Medical_ResMLP(nn.Module):
+    """Compact residual MLP for medical tabular data.
+
+    This is stronger than the linear baselines while staying lightweight enough
+    for federated runs on small tabular datasets.
+    """
+
+    def __init__(
+        self,
+        input_dim: int | None = None,
+        output_size: int = 2,
+        hidden_dim: int = 96,
+        depth: int = 3,
+        dropout: float = 0.20,
+    ):
+        super().__init__()
+        self.input_proj = (
+            nn.LazyLinear(hidden_dim) if input_dim is None else nn.Linear(input_dim, hidden_dim)
+        )
+        self.blocks = nn.ModuleList(
+            [_TabularResidualBlock(hidden_dim, dropout=dropout) for _ in range(depth)]
+        )
+        self.head = nn.Sequential(
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, output_size),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.input_proj(x.float())
+        for block in self.blocks:
+            x = block(x)
+        return self.head(x)
 
 
 class Adult_MLP(nn.Module):
