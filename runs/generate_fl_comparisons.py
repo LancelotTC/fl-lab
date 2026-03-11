@@ -3,14 +3,14 @@ Generate FL comparison artifacts focused on:
 - quality (global metrics),
 - fairness (cross-client disparity),
 - cost (runtime + communication),
-- privacy tags (DP noise inferred from run naming).
+- privacy tags (DP epsilon inferred from run naming).
 
 Expected run folders are under `runs/` and contain at least one of:
 - `global_metrics.csv` (federated/decentralized),
 - `metrics.csv` (centralized).
 
 Recommended DP run naming:
-- `...-noise-0.3...` or `..._noise_0.3...`
+- `...-eps-8.0...` or `..._epsilon_8.0...`
 - `...-mgn-1.0...` for max_grad_norm (optional)
 """
 
@@ -63,7 +63,7 @@ class RunRecord:
     model: str
     setting: str
     is_dp: bool
-    dp_noise_mul: Optional[float]
+    dp_epsilon: Optional[float]
     dp_max_grad_norm: Optional[float]
     n_rounds: int
     final_round: int
@@ -151,9 +151,9 @@ def infer_setting(name: str) -> str:
 
 def parse_float_tag(name: str, key: str) -> Optional[float]:
     # Examples captured:
-    # - noise-0.3
-    # - noise_0.3
-    # - noise-0p3
+    # - eps-8.0
+    # - eps_8.0
+    # - epsilon-8p0
     # - mgn-1.0
     pattern = rf"{key}[._-]?([0-9]+p[0-9]+|[0-9]+(?:\.[0-9]+)?)"
     match = re.search(pattern, name.lower())
@@ -459,7 +459,11 @@ def parse_run(
     )
 
     name = run_dir.name
-    noise = parse_float_tag(name, "noise")
+    epsilon = parse_float_tag(name, "epsilon")
+    if epsilon is None:
+        epsilon = parse_float_tag(name, "eps")
+    if epsilon is None:
+        epsilon = parse_float_tag(name, "noise")
     mgn = parse_float_tag(name, "mgn")
     if mgn is None:
         mgn = parse_float_tag(name, "maxgradnorm")
@@ -471,8 +475,8 @@ def parse_run(
         dataset=infer_dataset(name),
         model=infer_model(name),
         setting=infer_setting(name),
-        is_dp=(noise is not None) or ("dp" in name.lower()),
-        dp_noise_mul=noise,
+        is_dp=(epsilon is not None) or ("dp" in name.lower()),
+        dp_epsilon=epsilon,
         dp_max_grad_norm=mgn,
         n_rounds=n_rounds,
         final_round=final_round,
@@ -547,7 +551,7 @@ def make_bar_plot(
     plt.close()
 
 
-def make_noise_scatter(out_path: Path, title: str, ylabel: str, pairs: list[tuple[float, float, str]]) -> None:
+def make_epsilon_scatter(out_path: Path, title: str, ylabel: str, pairs: list[tuple[float, float, str]]) -> None:
     if len(pairs) < 2:
         return
     plt.figure(figsize=(8, 6))
@@ -557,7 +561,7 @@ def make_noise_scatter(out_path: Path, title: str, ylabel: str, pairs: list[tupl
     for x, y, label in pairs:
         plt.annotate(label, (x, y), fontsize=7, xytext=(4, 4), textcoords="offset points")
     plt.title(title)
-    plt.xlabel("dp_noise_mul")
+    plt.xlabel("dp_epsilon")
     plt.ylabel(ylabel)
     plt.grid(alpha=0.25, linestyle="--")
     plt.tight_layout()
@@ -624,7 +628,7 @@ def main() -> int:
             local_global["dataset"] = record.dataset
             local_global["model"] = record.model
             local_global["setting"] = record.setting
-            local_global["dp_noise_mul"] = record.dp_noise_mul
+            local_global["dp_epsilon"] = record.dp_epsilon
             roundwise_rows.append(local_global)
 
             if fairness is not None and not fairness.empty:
@@ -633,7 +637,7 @@ def main() -> int:
                 local_fair["dataset"] = record.dataset
                 local_fair["model"] = record.model
                 local_fair["setting"] = record.setting
-                local_fair["dp_noise_mul"] = record.dp_noise_mul
+                local_fair["dp_epsilon"] = record.dp_epsilon
                 fairness_rows.append(local_fair)
 
             if client_by_round is not None and not client_by_round.empty:
@@ -642,7 +646,7 @@ def main() -> int:
                 local_client["dataset"] = record.dataset
                 local_client["model"] = record.model
                 local_client["setting"] = record.setting
-                local_client["dp_noise_mul"] = record.dp_noise_mul
+                local_client["dp_epsilon"] = record.dp_epsilon
                 client_roundwise_rows.append(local_client)
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{run_dir}: {exc}")
@@ -656,7 +660,7 @@ def main() -> int:
         return 1
 
     summary_df = pd.DataFrame([r.__dict__ for r in records]).sort_values(
-        by=["dataset", "model", "setting", "dp_noise_mul", "run_label"],
+        by=["dataset", "model", "setting", "dp_epsilon", "run_label"],
         na_position="last",
     )
     summary_csv = out_dir / "run_summary.csv"
@@ -917,41 +921,41 @@ def main() -> int:
         )
 
     # DP trade-off scatter plots.
-    noise_quality_pairs = []
-    noise_fair_pairs = []
-    noise_cost_pairs = []
+    epsilon_quality_pairs = []
+    epsilon_fair_pairs = []
+    epsilon_cost_pairs = []
     for _, row in summary_df.iterrows():
-        noise = to_float_or_none(row.get("dp_noise_mul"))
-        if noise is None:
+        epsilon = to_float_or_none(row.get("dp_epsilon"))
+        if epsilon is None:
             continue
         label = str(row["run_label"])
         q = to_float_or_none(row.get("final_macro_f1"))
         fgap = to_float_or_none(row.get("fairness_final_acc_gap"))
         cost = to_float_or_none(row.get("run_time_seconds"))
         if q is not None:
-            noise_quality_pairs.append((noise, q, label))
+            epsilon_quality_pairs.append((epsilon, q, label))
         if fgap is not None:
-            noise_fair_pairs.append((noise, fgap, label))
+            epsilon_fair_pairs.append((epsilon, fgap, label))
         if cost is not None:
-            noise_cost_pairs.append((noise, cost, label))
+            epsilon_cost_pairs.append((epsilon, cost, label))
 
-    make_noise_scatter(
-        out_dir / "dp_noise_vs_quality_macro_f1.png",
-        "DP Noise vs Final Macro-F1",
+    make_epsilon_scatter(
+        out_dir / "dp_epsilon_vs_quality_macro_f1.png",
+        "DP Epsilon vs Final Macro-F1",
         "final_macro_f1",
-        noise_quality_pairs,
+        epsilon_quality_pairs,
     )
-    make_noise_scatter(
-        out_dir / "dp_noise_vs_fairness_acc_gap.png",
-        "DP Noise vs Final Fairness Gap (Accuracy)",
+    make_epsilon_scatter(
+        out_dir / "dp_epsilon_vs_fairness_acc_gap.png",
+        "DP Epsilon vs Final Fairness Gap (Accuracy)",
         "final fairness acc gap",
-        noise_fair_pairs,
+        epsilon_fair_pairs,
     )
-    make_noise_scatter(
-        out_dir / "dp_noise_vs_runtime.png",
-        "DP Noise vs Run Time",
+    make_epsilon_scatter(
+        out_dir / "dp_epsilon_vs_runtime.png",
+        "DP Epsilon vs Run Time",
         "run_time_seconds",
-        noise_cost_pairs,
+        epsilon_cost_pairs,
     )
 
     print(f"Parsed runs: {len(records)}")

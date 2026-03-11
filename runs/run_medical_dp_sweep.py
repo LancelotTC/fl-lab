@@ -1,12 +1,12 @@
 """
 Run medical FL experiments with differential privacy across IID/non-IID splits
-and multiple DP noise levels using the real `fluke` CLI.
+and multiple DP epsilon levels using the real `fluke` CLI.
 
 Usage:
     python runs/run_medical_dp_sweep.py
 
 Optional:
-    python runs/run_medical_dp_sweep.py --noise-levels 0.0 0.1 0.3 0.6 1.0 --rounds 50
+    python runs/run_medical_dp_sweep.py --epsilon-levels 1.0 3.0 6.0 8.0 10.0 --rounds 50
     python runs/run_medical_dp_sweep.py --fluke C:\\Users\\lance\\miniconda3\\envs\\fluke310\\Scripts\\fluke.exe
 """
 
@@ -29,11 +29,17 @@ def parse_args() -> argparse.Namespace:
         help="Path to `fluke` executable. If omitted, auto-detection is used.",
     )
     parser.add_argument(
-        "--noise-levels",
+        "--epsilon-levels",
         nargs="+",
         type=float,
-        default=[0.0, 0.1, 0.3, 0.6, 1.0],
-        help="DP noise multipliers to test.",
+        default=[1.0, 3.0, 6.0, 8.0, 10.0],
+        help="Target epsilon values to test.",
+    )
+    parser.add_argument(
+        "--delta",
+        type=float,
+        default=1e-5,
+        help="Target delta used by Opacus.",
     )
     parser.add_argument(
         "--max-grad-norm",
@@ -86,19 +92,26 @@ def run_one(
     fluke_exe: Path,
     project_root: Path,
     exp_cfg: str,
-    noise: float,
+    epsilon: float,
+    delta: float,
     max_grad_norm: float,
     rounds: int,
 ) -> int:
     dist_tag = "iid" if "iid" in exp_cfg and "non-iid" not in exp_cfg else "non-iid"
-    run_dir = f"runs/medical-dp-svm-{dist_tag}-noise-{noise}-mgn-{max_grad_norm}".replace(".", "p")
+    dp_total_epochs = rounds * 10
+    run_dir = (
+        f"runs/medical-dp-svm-{dist_tag}-eps-{epsilon}-delta-{delta}-mgn-{max_grad_norm}"
+        .replace(".", "p")
+    )
     cmd = [
         str(fluke_exe),
         "federation",
         exp_cfg,
         "config/fl-config-svm-dp.yaml",
-        f"method.hyperparameters.client.noise_mul={noise}",
+        f"method.hyperparameters.client.target_epsilon={epsilon}",
+        f"method.hyperparameters.client.target_delta={delta}",
         f"method.hyperparameters.client.max_grad_norm={max_grad_norm}",
+        f"method.hyperparameters.client.dp_total_epochs={dp_total_epochs}",
         f"protocol.n_rounds={rounds}",
         f"logger.log_dir={run_dir}",
     ]
@@ -126,18 +139,19 @@ def main() -> int:
     exp_cfgs = ["config/medical-data-iid.yaml", "config/medical-data-non-iid.yaml"]
     failures = 0
     for exp_cfg in exp_cfgs:
-        for noise in args.noise_levels:
+        for epsilon in args.epsilon_levels:
             rc = run_one(
                 fluke_exe=fluke_exe,
                 project_root=project_root,
                 exp_cfg=exp_cfg,
-                noise=noise,
+                epsilon=epsilon,
+                delta=args.delta,
                 max_grad_norm=args.max_grad_norm,
                 rounds=args.rounds,
             )
             if rc != 0:
                 failures += 1
-                print(f"Failed run: exp_cfg={exp_cfg}, noise={noise}, rc={rc}")
+                print(f"Failed run: exp_cfg={exp_cfg}, epsilon={epsilon}, rc={rc}")
 
     if failures:
         print(f"\nSweep finished with {failures} failed run(s).")
