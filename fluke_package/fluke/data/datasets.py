@@ -280,8 +280,10 @@ class Datasets:
     def MEDICAL(
         cls,
         path: str = "../data",
-        filename: str = "Thyroid_Diff.csv",
-        target_col: str = "Recurred",
+        # filename: str = "Thyroid_Diff.csv",
+        # target_col: str = "Recurred",
+        filename: str = "smoking.csv",
+        target_col: str = "smoking",
         test_size: float = 0.2,
         seed: int = 42,
     ) -> DataContainer:

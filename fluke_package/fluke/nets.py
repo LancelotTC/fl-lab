@@ -669,12 +669,13 @@ class _TabularResidualBlock(nn.Module):
 
     def __init__(self, width: int, dropout: float = 0.1):
         super().__init__()
+        expanded = width * 2
         self.block = nn.Sequential(
             nn.LayerNorm(width),
-            nn.Linear(width, width),
+            nn.Linear(width, expanded),
             nn.GELU(),
             nn.Dropout(dropout),
-            nn.Linear(width, width),
+            nn.Linear(expanded, width),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -692,17 +693,13 @@ class Medical_ResMLP(nn.Module):
         self,
         input_dim: int | None = None,
         output_size: int = 2,
-        hidden_dim: int = 96,
-        depth: int = 3,
+        hidden_dim: int = 192,
+        depth: int = 5,
         dropout: float = 0.20,
     ):
         super().__init__()
-        self.input_proj = (
-            nn.LazyLinear(hidden_dim) if input_dim is None else nn.Linear(input_dim, hidden_dim)
-        )
-        self.blocks = nn.ModuleList(
-            [_TabularResidualBlock(hidden_dim, dropout=dropout) for _ in range(depth)]
-        )
+        self.input_proj = nn.LazyLinear(hidden_dim) if input_dim is None else nn.Linear(input_dim, hidden_dim)
+        self.blocks = nn.ModuleList([_TabularResidualBlock(hidden_dim, dropout=dropout) for _ in range(depth)])
         self.head = nn.Sequential(
             nn.LayerNorm(hidden_dim),
             nn.GELU(),

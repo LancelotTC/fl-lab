@@ -22,6 +22,16 @@ import pandas as pd
 
 GLOBAL_METRICS_FILE = "global_metrics.csv"
 
+LINE_FIGSIZE = (11, 6)
+LINE_MARGINS = {"left": 0.11, "right": 0.97, "bottom": 0.13, "top": 0.90}
+
+
+def _new_axes(figsize: tuple[float, float], margins: dict[str, float]) -> tuple[plt.Figure, plt.Axes]:
+    fig, ax = plt.subplots(figsize=figsize)
+    fig.subplots_adjust(**margins)
+    return fig, ax
+
+
 METRICS = {
     "accuracy": {"plot_label": "Accuracy", "file_label": "Accuracy"},
     "macro_f1": {"plot_label": "F1 score (macro)", "file_label": "F1 score"},
@@ -71,6 +81,36 @@ def parse_iidness(name: str) -> str | None:
 
 def is_close_to_any(v: float, targets: list[float], tol: float = 1e-9) -> bool:
     return any(math.isclose(v, t, abs_tol=tol) for t in targets)
+
+
+def infer_privacy_label(name: str) -> str | None:
+    lower = name.lower()
+    if 'epsilon' in lower or 'eps' in lower:
+        return 'epsilon'
+    if 'noise' in lower:
+        return 'noise'
+    return None
+
+
+def discover_privacy_levels(runs_dir: Path, dataset_filter: str) -> tuple[list[float], str]:
+    levels: set[float] = set()
+    labels: set[str] = set()
+    for d in sorted(runs_dir.iterdir()):
+        if not d.is_dir():
+            continue
+        name = d.name.lower()
+        if dataset_filter and dataset_filter.lower() not in name:
+            continue
+        level = parse_privacy_level(name)
+        if level is None:
+            continue
+        levels.add(level)
+        label = infer_privacy_label(name)
+        if label is not None:
+            labels.add(label)
+
+    privacy_label = labels.pop() if len(labels) == 1 else 'privacy'
+    return sorted(levels), privacy_label
 
 
 def load_round_metric_series(run_dir: Path, metric_col: str) -> pd.DataFrame | None:
@@ -177,7 +217,7 @@ def plot_metric_for_iidness(
         for i, privacy_level in enumerate(sorted(privacy_levels))
     }
 
-    plt.figure(figsize=(11, 6))
+    fig, ax = _new_axes(LINE_FIGSIZE, LINE_MARGINS)
     plotted = 0
     for privacy_level in sorted(privacy_levels):
         key = (iidness, privacy_level)
@@ -186,7 +226,7 @@ def plot_metric_for_iidness(
         s = aggregated[key]
         if s.empty:
             continue
-        plt.plot(
+        ax.plot(
             s["round"].to_numpy(dtype=float),
             s[metric_col].to_numpy(dtype=float),
             label=f"{privacy_label}={privacy_level:g}",
@@ -197,25 +237,22 @@ def plot_metric_for_iidness(
         plotted += 1
 
     if plotted == 0:
-        plt.close()
+        plt.close(fig)
         return False
 
-    plt.title(title)
-    plt.xlabel("FL round")
-    plt.ylabel(y_label)
-    plt.grid(alpha=0.25, linestyle="--")
-    plt.legend(fontsize=9)
-    plt.tight_layout()
+    ax.set_title(title)
+    ax.set_xlabel("FL round")
+    ax.set_ylabel(y_label)
+    ax.grid(alpha=0.25, linestyle="--")
+    ax.legend(fontsize=9)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(out_path, dpi=150)
-    plt.close()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
     return True
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Plot metric progression by IID-ness and DP privacy level."
-    )
+    parser = argparse.ArgumentParser(description="Plot metric progression by IID-ness and DP privacy level.")
     parser.add_argument(
         "--runs-dir",
         type=Path,
@@ -238,8 +275,8 @@ def parse_args() -> argparse.Namespace:
         "--epsilon-levels",
         type=float,
         nargs="+",
-        default=[1.0, 3.0, 6.0, 8.0, 10.0],
-        help="Epsilon levels to include.",
+        default=None,
+        help="Optional epsilon levels to include. If omitted, infer from available runs.",
     )
     parser.add_argument(
         "--noise-levels",
@@ -256,8 +293,19 @@ def main() -> int:
     runs_dir = args.runs_dir.resolve()
     out_dir = args.out_dir.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    privacy_levels = args.epsilon_levels if args.noise_levels is None else args.noise_levels
-    privacy_label = "epsilon" if args.noise_levels is None else "noise"
+
+    if args.noise_levels is not None:
+        privacy_levels = args.noise_levels
+        privacy_label = "noise"
+    elif args.epsilon_levels is not None:
+        privacy_levels = args.epsilon_levels
+        privacy_label = "epsilon"
+    else:
+        privacy_levels, privacy_label = discover_privacy_levels(runs_dir, args.dataset)
+        if not privacy_levels:
+            print("No privacy levels were inferred from the available run folders.")
+            return 1
+        print(f"Inferred {privacy_label} levels: {', '.join(str(v) for v in privacy_levels)}")
 
     wrote_any = False
     roundwise_rows: list[pd.DataFrame] = []

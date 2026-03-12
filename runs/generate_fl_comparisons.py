@@ -10,7 +10,7 @@ Expected run folders are under `runs/` and contain at least one of:
 - `metrics.csv` (centralized).
 
 Recommended DP run naming:
-- `...-eps-8.0...` or `..._epsilon_8.0...`
+- `...-eps-1.5...` or `..._epsilon_1.5...`
 - `...-mgn-1.0...` for max_grad_norm (optional)
 """
 
@@ -53,6 +53,19 @@ KNOWN_DATASETS = (
     "shakespeare",
 )
 KNOWN_MODELS = ("svm", "logreg", "mlp", "2nn", "cnn", "resnet", "lstm")
+
+LINE_FIGSIZE = (11, 6)
+BAR_FIGSIZE = (11, 6)
+SCATTER_FIGSIZE = (8, 6)
+LINE_MARGINS = {"left": 0.11, "right": 0.97, "bottom": 0.13, "top": 0.90}
+BAR_MARGINS = {"left": 0.11, "right": 0.97, "bottom": 0.27, "top": 0.90}
+SCATTER_MARGINS = {"left": 0.14, "right": 0.97, "bottom": 0.13, "top": 0.90}
+
+
+def _new_axes(figsize: tuple[float, float], margins: dict[str, float]) -> tuple[plt.Figure, plt.Axes]:
+    fig, ax = plt.subplots(figsize=figsize)
+    fig.subplots_adjust(**margins)
+    return fig, ax
 
 
 @dataclass
@@ -151,7 +164,7 @@ def infer_setting(name: str) -> str:
 
 def parse_float_tag(name: str, key: str) -> Optional[float]:
     # Examples captured:
-    # - eps-8.0
+    # - eps-1.5
     # - eps_8.0
     # - epsilon-8p0
     # - mgn-1.0
@@ -517,17 +530,16 @@ def make_line_plot(
 ) -> None:
     if not series:
         return
-    plt.figure(figsize=(11, 6))
+    fig, ax = _new_axes(LINE_FIGSIZE, LINE_MARGINS)
     for label, x, y in series:
-        plt.plot(x, y, marker="o", linewidth=1.6, markersize=3.2, label=label)
-    plt.title(title)
-    plt.xlabel("Round")
-    plt.ylabel(ylabel)
-    plt.grid(alpha=0.25, linestyle="--")
-    plt.legend(fontsize=8)
-    plt.tight_layout()
-    plt.savefig(out_path, dpi=150)
-    plt.close()
+        ax.plot(x, y, marker="o", linewidth=1.6, markersize=3.2, label=label)
+    ax.set_title(title)
+    ax.set_xlabel("Round")
+    ax.set_ylabel(ylabel)
+    ax.grid(alpha=0.25, linestyle="--")
+    ax.legend(fontsize=8)
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
 
 
 def make_bar_plot(
@@ -539,34 +551,33 @@ def make_bar_plot(
 ) -> None:
     if not labels:
         return
-    plt.figure(figsize=(11, 6))
+    fig, ax = _new_axes(BAR_FIGSIZE, BAR_MARGINS)
     xs = np.arange(len(labels))
-    plt.bar(xs, values, alpha=0.9)
-    plt.xticks(xs, labels, rotation=30, ha="right")
-    plt.title(title)
-    plt.ylabel(ylabel)
-    plt.grid(axis="y", alpha=0.25, linestyle="--")
-    plt.tight_layout()
-    plt.savefig(out_path, dpi=150)
-    plt.close()
+    ax.bar(xs, values, alpha=0.9)
+    ax.set_xticks(xs)
+    ax.set_xticklabels(labels, rotation=30, ha="right")
+    ax.set_title(title)
+    ax.set_ylabel(ylabel)
+    ax.grid(axis="y", alpha=0.25, linestyle="--")
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
 
 
 def make_epsilon_scatter(out_path: Path, title: str, ylabel: str, pairs: list[tuple[float, float, str]]) -> None:
     if len(pairs) < 2:
         return
-    plt.figure(figsize=(8, 6))
+    fig, ax = _new_axes(SCATTER_FIGSIZE, SCATTER_MARGINS)
     xs = [p[0] for p in pairs]
     ys = [p[1] for p in pairs]
-    plt.scatter(xs, ys, s=52, alpha=0.9)
+    ax.scatter(xs, ys, s=52, alpha=0.9)
     for x, y, label in pairs:
-        plt.annotate(label, (x, y), fontsize=7, xytext=(4, 4), textcoords="offset points")
-    plt.title(title)
-    plt.xlabel("dp_epsilon")
-    plt.ylabel(ylabel)
-    plt.grid(alpha=0.25, linestyle="--")
-    plt.tight_layout()
-    plt.savefig(out_path, dpi=150)
-    plt.close()
+        ax.annotate(label, (x, y), fontsize=7, xytext=(4, 4), textcoords="offset points")
+    ax.set_title(title)
+    ax.set_xlabel("dp_epsilon")
+    ax.set_ylabel(ylabel)
+    ax.grid(alpha=0.25, linestyle="--")
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
 
 
 def concat_drop_all_na(frames: list[pd.DataFrame]) -> pd.DataFrame:

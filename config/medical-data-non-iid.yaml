@@ -5,7 +5,7 @@ data:
         path: ./data
     distribution:
         name: dir
-        beta: 0.7
+        beta: 1
     keep_test: true
     sampling_perc: 1.0
     server_split: 0.0
@@ -28,4 +28,4 @@ logger:
 protocol:
     eligible_perc: 1.0
     n_clients: 10
-    n_rounds: 10
+    n_rounds: 20
