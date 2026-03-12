@@ -243,6 +243,8 @@ def plot_metric_for_iidness(
     ax.set_title(title)
     ax.set_xlabel("FL round")
     ax.set_ylabel(y_label)
+    if metric_col != "loss":
+        ax.set_ylim(0, 1)
     ax.grid(alpha=0.25, linestyle="--")
     ax.legend(fontsize=9)
     out_path.parent.mkdir(parents=True, exist_ok=True)
