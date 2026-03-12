@@ -25,6 +25,10 @@ fluke federation config/medical-data-non-iid.yaml config/fl-config-svm-dp.yaml h
 
 # Vertical disjoint runs (true VFL without overlapping columns)
 fluke federation config/medical-data-vertical-disjoint.yaml config/fl-config-vfl.yaml logger.log_dir=runs/medical-vfl-vertical-disjoint
+# 5 Clients
+fluke federation config/medical-data-vertical-disjoint-5-clients.yaml config/fl-config-vfl.yaml
 
 # Vertical overlap runs (true VFL with overlapping/shared columns)
 fluke federation config/medical-data-vertical-overlap.yaml config/fl-config-vfl.yaml logger.log_dir=runs/medical-vfl-vertical-overlap
+# 5 clients
+fluke federation config/medical-data-vertical-overlap-5-clients.yaml config/fl-config-vfl.yaml

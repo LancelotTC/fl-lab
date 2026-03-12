@@ -49,6 +49,7 @@ COMPARISON_GROUPS = {
 }
 
 BASELINE_KEY = "baseline"
+RUN_KEY_PREFIX = "run:"
 
 
 def _new_axes(figsize: tuple[float, float], margins: dict[str, float]) -> tuple[plt.Figure, plt.Axes]:
@@ -123,6 +124,36 @@ def infer_privacy_label(name: str) -> str | None:
     if "noise" in lower:
         return "noise"
     return None
+
+
+def canonical_vertical_run_label(name: str) -> str | None:
+    lower = name.lower()
+    if "vertical-overlap" in lower:
+        setting = "vertical-overlap"
+    elif "vertical-disjoint" in lower:
+        setting = "vertical-disjoint"
+    else:
+        return None
+
+    dataset = "medical" if "medical" in lower else None
+    if dataset is None:
+        return None
+
+    patterns = (
+        r"(?:^|[^0-9])(\d+)[-_]?clients?(?:[^a-z0-9]|$)",
+        r"clients?[-_ ]?(\d+)",
+        r"n[-_ ]?clients?[-_ ]?(\d+)",
+    )
+    client_count = None
+    for pattern in patterns:
+        match = re.search(pattern, lower)
+        if match:
+            client_count = int(match.group(1))
+            break
+    if client_count is None:
+        return None
+
+    return f"{dataset}-vfl-{setting}-{client_count}-clients"
 
 
 def discover_privacy_levels(runs_dir: Path, dataset_filter: str) -> tuple[list[float], str]:
@@ -214,17 +245,20 @@ def aggregate_runs_for_metric(
 
         privacy_level = parse_privacy_level(name)
         if privacy_level is None:
-            privacy_key = BASELINE_KEY
+            if setting.startswith("vertical"):
+                series_key = f"{RUN_KEY_PREFIX}{d.name}"
+            else:
+                series_key = BASELINE_KEY
         else:
             if privacy_levels and not is_close_to_any(privacy_level, privacy_levels):
                 continue
-            privacy_key = f"{privacy_level:g}"
+            series_key = f"{privacy_level:g}"
 
         sdf = load_round_metric_series(d, metric_col)
         if sdf is None or sdf.empty:
             continue
 
-        key = (setting, privacy_key)
+        key = (setting, series_key)
         series_by_key.setdefault(key, []).append(sdf)
 
     aggregated: dict[tuple[str, str], pd.DataFrame] = {}
@@ -236,24 +270,35 @@ def aggregate_runs_for_metric(
     return aggregated
 
 
-def ordered_privacy_keys(aggregated: dict[tuple[str, str], pd.DataFrame], setting: str) -> list[str]:
-    keys = sorted({privacy_key for s, privacy_key in aggregated if s == setting and privacy_key != BASELINE_KEY}, key=float)
-    if any(s == setting and privacy_key == BASELINE_KEY for s, privacy_key in aggregated):
-        return [BASELINE_KEY, *keys]
-    return keys
+def ordered_series_keys(aggregated: dict[tuple[str, str], pd.DataFrame], setting: str) -> list[str]:
+    keys = {series_key for s, series_key in aggregated if s == setting}
+    ordered: list[str] = []
+    if BASELINE_KEY in keys:
+        ordered.append(BASELINE_KEY)
+    run_keys = sorted(k for k in keys if k.startswith(RUN_KEY_PREFIX))
+    ordered.extend(run_keys)
+    numeric_keys = sorted(
+        (k for k in keys if k not in ordered),
+        key=float,
+    )
+    ordered.extend(numeric_keys)
+    return ordered
 
 
-def privacy_display_label(privacy_key: str, privacy_label: str) -> str:
-    if privacy_key == BASELINE_KEY:
+def series_display_label(series_key: str, privacy_label: str) -> str:
+    if series_key == BASELINE_KEY:
         return "baseline"
-    return f"{privacy_label}={privacy_key}"
+    if series_key.startswith(RUN_KEY_PREFIX):
+        run_name = series_key[len(RUN_KEY_PREFIX) :]
+        return canonical_vertical_run_label(run_name) or run_name
+    return f"{privacy_label}={series_key}"
 
 
-def comparison_series_label(setting: str, privacy_key: str, privacy_label: str) -> str:
+def comparison_series_label(setting: str, series_key: str, privacy_label: str) -> str:
     setting_label = SETTING_META[setting]["label"]
-    if privacy_key == BASELINE_KEY:
+    if series_key == BASELINE_KEY:
         return setting_label
-    return f"{setting_label} | {privacy_display_label(privacy_key, privacy_label)}"
+    return f"{setting_label} | {series_display_label(series_key, privacy_label)}"
 
 
 def plot_metric_for_setting(
@@ -268,31 +313,33 @@ def plot_metric_for_setting(
     if not aggregated:
         return False
 
-    keys = ordered_privacy_keys(aggregated, setting)
+    keys = ordered_series_keys(aggregated, setting)
     if not keys:
         return False
 
-    numeric_keys = [k for k in keys if k != BASELINE_KEY]
-    colors = {
-        privacy_key: plt.cm.viridis(i / max(1, len(numeric_keys) - 1))
-        for i, privacy_key in enumerate(numeric_keys)
-    }
+    colors: dict[str, tuple[float, float, float, float] | str] = {}
+    run_keys = [k for k in keys if k.startswith(RUN_KEY_PREFIX)]
+    numeric_keys = [k for k in keys if k not in run_keys and k != BASELINE_KEY]
+    for i, series_key in enumerate(run_keys):
+        colors[series_key] = plt.cm.tab10(i % 10)
+    for i, series_key in enumerate(numeric_keys):
+        colors[series_key] = plt.cm.viridis(i / max(1, len(numeric_keys) - 1))
 
     fig, ax = _new_axes(LINE_FIGSIZE, LINE_MARGINS)
     plotted = 0
-    for privacy_key in keys:
-        key = (setting, privacy_key)
+    for series_key in keys:
+        key = (setting, series_key)
         if key not in aggregated:
             continue
         s = aggregated[key]
         if s.empty:
             continue
-        color = "#444444" if privacy_key == BASELINE_KEY else colors[privacy_key]
-        linestyle = "--" if privacy_key == BASELINE_KEY else "-"
+        color = "#444444" if series_key == BASELINE_KEY else colors[series_key]
+        linestyle = "--" if series_key == BASELINE_KEY else "-"
         ax.plot(
             s["round"].to_numpy(dtype=float),
             s[metric_col].to_numpy(dtype=float),
-            label=privacy_display_label(privacy_key, privacy_label),
+            label=series_display_label(series_key, privacy_label),
             color=color,
             linestyle=linestyle,
             linewidth=1.9,
@@ -327,14 +374,14 @@ def plot_metric_for_comparison_group(
 ) -> bool:
     series: list[tuple[str, str, pd.DataFrame]] = []
     for setting in settings:
-        for privacy_key in ordered_privacy_keys(aggregated, setting):
-            key = (setting, privacy_key)
+        for series_key in ordered_series_keys(aggregated, setting):
+            key = (setting, series_key)
             if key not in aggregated:
                 continue
             s = aggregated[key]
             if s.empty:
                 continue
-            series.append((setting, privacy_key, s))
+            series.append((setting, series_key, s))
 
     if not series:
         return False
@@ -342,16 +389,16 @@ def plot_metric_for_comparison_group(
     fig, ax = _new_axes(LINE_FIGSIZE, LINE_MARGINS)
     style_cycle = ["-", "--", ":", "-."]
     plotted = 0
-    for idx, (setting, privacy_key, s) in enumerate(series):
-        if privacy_key == BASELINE_KEY:
+    for idx, (setting, series_key, s) in enumerate(series):
+        if series_key == BASELINE_KEY or series_key.startswith(RUN_KEY_PREFIX):
             linestyle = "-"
         else:
-            privacy_idx = max(0, ordered_privacy_keys(aggregated, setting).index(privacy_key) - 1)
+            privacy_idx = max(0, ordered_series_keys(aggregated, setting).index(series_key) - 1)
             linestyle = style_cycle[privacy_idx % len(style_cycle)]
         ax.plot(
             s["round"].to_numpy(dtype=float),
             s[metric_col].to_numpy(dtype=float),
-            label=comparison_series_label(setting, privacy_key, privacy_label),
+            label=comparison_series_label(setting, series_key, privacy_label),
             color=SETTING_COLORS.get(setting, plt.cm.tab10(idx % 10)),
             linestyle=linestyle,
             linewidth=1.9,
@@ -447,13 +494,22 @@ def main() -> int:
             print(f"Skip {metric_col}: no matching runs or metric column.")
             continue
 
-        for (setting, privacy_key), df in aggregated.items():
+        for (setting, series_key), df in aggregated.items():
             tmp = df.copy()
             tmp["metric"] = metric_col
             tmp["setting"] = setting
-            tmp["privacy_key"] = privacy_key
-            tmp["privacy_level"] = np.nan if privacy_key == BASELINE_KEY else float(privacy_key)
-            tmp["privacy_label"] = "baseline" if privacy_key == BASELINE_KEY else privacy_label
+            tmp["series_key"] = series_key
+            tmp["privacy_level"] = (
+                np.nan
+                if series_key == BASELINE_KEY or series_key.startswith(RUN_KEY_PREFIX)
+                else float(series_key)
+            )
+            tmp["series_label"] = series_display_label(series_key, privacy_label)
+            tmp["privacy_label"] = (
+                "baseline"
+                if series_key == BASELINE_KEY or series_key.startswith(RUN_KEY_PREFIX)
+                else privacy_label
+            )
             roundwise_rows.append(tmp)
 
         for setting, meta in SETTING_META.items():
