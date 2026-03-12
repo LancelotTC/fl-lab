@@ -38,6 +38,9 @@ __all__ = [
     "Medical_SVM",
     "Medical_KNN",
     "Medical_ResMLP",
+    "VerticalTabularEncoder",
+    "VerticalTabularHead",
+    "Medical_VFL",
     "Adult_MLP",
     "CifarConv2",
     "CifarConv2_E",
@@ -712,6 +715,99 @@ class Medical_ResMLP(nn.Module):
         for block in self.blocks:
             x = block(x)
         return self.head(x)
+
+
+class VerticalTabularEncoder(nn.Module):
+    """Lightweight per-party encoder for true tabular VFL."""
+
+    def __init__(
+        self,
+        input_dim: int,
+        embedding_dim: int = 16,
+        hidden_dim: int = 32,
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+        self.embedding_dim = int(embedding_dim)
+        self.net = nn.Sequential(
+            nn.Linear(int(input_dim), int(hidden_dim)),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(int(hidden_dim), self.embedding_dim),
+            nn.LayerNorm(self.embedding_dim),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x.float())
+
+
+class VerticalTabularHead(nn.Module):
+    """Server-side prediction head for concatenated VFL embeddings."""
+
+    def __init__(
+        self,
+        n_parties: int,
+        embedding_dim: int = 16,
+        hidden_dim: int = 64,
+        output_size: int = 2,
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+        total_dim = int(n_parties) * int(embedding_dim)
+        self.net = nn.Sequential(
+            nn.Linear(total_dim, int(hidden_dim)),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(int(hidden_dim), int(output_size)),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x.float())
+
+
+class Medical_VFL(nn.Module):
+    """Factory for the medical true-VFL tabular model.
+
+    The model is intentionally split into per-party encoders and a server head.
+    Use :class:`fluke.algorithms.vertical.VerticalFL` to train it.
+    """
+
+    def __init__(
+        self,
+        embedding_dim: int = 16,
+        client_hidden_dim: int = 32,
+        server_hidden_dim: int = 64,
+        output_size: int = 2,
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+        self.embedding_dim = int(embedding_dim)
+        self.client_hidden_dim = int(client_hidden_dim)
+        self.server_hidden_dim = int(server_hidden_dim)
+        self.output_size = int(output_size)
+        self.dropout = float(dropout)
+
+    def make_client_encoder(self, input_dim: int) -> VerticalTabularEncoder:
+        return VerticalTabularEncoder(
+            input_dim=int(input_dim),
+            embedding_dim=self.embedding_dim,
+            hidden_dim=self.client_hidden_dim,
+            dropout=self.dropout,
+        )
+
+    def make_server_head(self, n_parties: int) -> VerticalTabularHead:
+        return VerticalTabularHead(
+            n_parties=int(n_parties),
+            embedding_dim=self.embedding_dim,
+            hidden_dim=self.server_hidden_dim,
+            output_size=self.output_size,
+            dropout=self.dropout,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        raise RuntimeError(
+            "Medical_VFL is a split-model factory. Train it with fluke.algorithms.vertical.VerticalFL."
+        )
 
 
 class Adult_MLP(nn.Module):

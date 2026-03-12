@@ -6,7 +6,7 @@ Usage:
     python runs/run_medical_dp_sweep.py
 
 Optional:
-    python runs/run_medical_dp_sweep.py --epsilon-levels 1.0 3.0 6.0 8.0 10.0 --rounds 50
+    python runs/run_medical_dp_sweep.py --epsilon-levels 0.2 0.5 1.0 5.0 --rounds 50
     python runs/run_medical_dp_sweep.py --fluke C:\\Users\\lance\\miniconda3\\envs\\fluke310\\Scripts\\fluke.exe
 """
 
@@ -32,7 +32,7 @@ def parse_args() -> argparse.Namespace:
         "--epsilon-levels",
         nargs="+",
         type=float,
-        default=[1.0, 3.0, 6.0, 8.0, 10.0],
+        default=[0.2, 0.5, 1.0, 5.0],
         help="Target epsilon values to test.",
     )
     parser.add_argument(
@@ -108,10 +108,10 @@ def run_one(
         "federation",
         exp_cfg,
         "config/fl-config-svm-dp.yaml",
-        f"method.hyperparameters.client.target_epsilon={epsilon}",
-        f"method.hyperparameters.client.target_delta={delta}",
-        f"method.hyperparameters.client.max_grad_norm={max_grad_norm}",
-        f"method.hyperparameters.client.dp_total_epochs={dp_total_epochs}",
+        f"hyperparameters.client.target_epsilon={epsilon}",
+        f"hyperparameters.client.target_delta={delta}",
+        f"hyperparameters.client.max_grad_norm={max_grad_norm}",
+        f"hyperparameters.client.dp_total_epochs={dp_total_epochs}",
         f"protocol.n_rounds={rounds}",
         f"logger.log_dir={run_dir}",
     ]

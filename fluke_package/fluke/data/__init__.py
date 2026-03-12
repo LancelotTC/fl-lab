@@ -597,7 +597,28 @@ class DataSplitter:
         feature_splits: Optional[list[list[int]]] = None,  # consumed later in assign()
         **kwargs,
     ) -> tuple[list[np.ndarray], list[np.ndarray] | None]:
-        """Alias of ``vertical`` for explicit IID naming in configs."""
+        """Backward-compatible alias of ``vertical_disjoint``."""
+        return DataSplitter.vertical_disjoint(
+            X_train=X_train,
+            y_train=y_train,
+            X_test=X_test,
+            y_test=y_test,
+            n=n,
+            feature_splits=feature_splits,
+            **kwargs,
+        )
+
+    @staticmethod
+    def vertical_disjoint(
+        X_train: torch.Tensor,
+        y_train: torch.Tensor,  # not used
+        X_test: Optional[torch.Tensor],
+        y_test: Optional[torch.Tensor],  # not used
+        n: int,
+        feature_splits: Optional[list[list[int]]] = None,  # consumed later in assign()
+        **kwargs,
+    ) -> tuple[list[np.ndarray], list[np.ndarray] | None]:
+        """Assign all samples to all clients with disjoint feature blocks resolved later."""
         return DataSplitter.vertical(
             X_train=X_train,
             y_train=y_train,
@@ -621,16 +642,36 @@ class DataSplitter:
         feature_splits: Optional[list[list[int]]] = None,  # consumed later in assign()
         **kwargs,
     ) -> tuple[list[np.ndarray], list[np.ndarray] | None]:
-        """Dirichlet non-IID sample assignment + vertical feature masking."""
-        return DataSplitter.label_dirichlet_skew(
+        """Backward-compatible alias of ``vertical_overlap``."""
+        return DataSplitter.vertical_overlap(
             X_train=X_train,
             y_train=y_train,
             X_test=X_test,
             y_test=y_test,
             n=n,
-            beta=beta,
-            min_ex_class=min_ex_class,
-            balanced=balanced,
+            feature_splits=feature_splits,
+            **kwargs,
+        )
+
+    @staticmethod
+    def vertical_overlap(
+        X_train: torch.Tensor,
+        y_train: torch.Tensor,
+        X_test: Optional[torch.Tensor],
+        y_test: Optional[torch.Tensor],
+        n: int,
+        feature_splits: Optional[list[list[int]]] = None,
+        **kwargs,
+    ) -> tuple[list[np.ndarray], list[np.ndarray] | None]:
+        """Assign all samples to all clients with potentially overlapping feature blocks."""
+        return DataSplitter.vertical(
+            X_train=X_train,
+            y_train=y_train,
+            X_test=X_test,
+            y_test=y_test,
+            n=n,
+            feature_splits=feature_splits,
+            **kwargs,
         )
 
     @staticmethod
@@ -958,7 +999,9 @@ class DataSplitter:
         "iid": iid,
         "vertical": vertical,
         "vertical_iid": vertical_iid,
+        "vertical_disjoint": vertical_disjoint,
         "vertical_dir": vertical_dir,
+        "vertical_overlap": vertical_overlap,
         "qnt": quantity_skew,
         "lbl_qnt": label_quantity_skew,
         "dir": label_dirichlet_skew,

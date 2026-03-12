@@ -52,7 +52,7 @@ KNOWN_DATASETS = (
     "fcube",
     "shakespeare",
 )
-KNOWN_MODELS = ("svm", "logreg", "mlp", "2nn", "cnn", "resnet", "lstm")
+KNOWN_MODELS = ("vfl", "svm", "logreg", "mlp", "2nn", "cnn", "resnet", "lstm")
 
 LINE_FIGSIZE = (11, 6)
 BAR_FIGSIZE = (11, 6)
@@ -153,6 +153,16 @@ def infer_setting(name: str) -> str:
         return "decentralized"
     if "centralized" in lower:
         return "centralized"
+    if "vertical" in lower:
+        if "overlap" in lower or "shared" in lower:
+            return "vertical-overlap"
+        if "disjoint" in lower or "without-overlap" in lower:
+            return "vertical-disjoint"
+        if "non-iid" in lower or "noniid" in lower or ("non" in tokens and "iid" in tokens):
+            return "vertical-overlap"
+        if "iid" in tokens:
+            return "vertical-disjoint"
+        return "vertical"
     if "non" in tokens and "iid" in tokens:
         return "non-iid"
     if "noniid" in lower:

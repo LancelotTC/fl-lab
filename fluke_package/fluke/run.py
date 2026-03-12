@@ -138,6 +138,11 @@ def centralized(
 
     cfg = Configuration(exp_cfg, alg_cfg)
     FlukeENV().configure(cfg)
+    if str(cfg.data.distribution.name).startswith("vertical") and not str(cfg.method.name).endswith("VerticalFL"):
+        raise ValueError(
+            "Vertical data distributions require fluke.algorithms.vertical.VerticalFL. "
+            "Use config/fl-config-vfl.yaml for vertical experiments."
+        )
     data_container = Datasets.get(**cfg.data.dataset)
     _maybe_set_input_dim(cfg, data_container.num_features, data_container.num_classes)
 

@@ -67,6 +67,7 @@ __all__ = [
     "pfedme",
     "scaffold",
     "superfed",
+    "vertical",
 ]
 
 

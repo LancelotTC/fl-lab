@@ -5,6 +5,7 @@ import tempfile
 from typing import Any
 
 import numpy as np
+import torch
 from torch.nn import CrossEntropyLoss, Module
 from torch.optim import SGD
 
@@ -16,13 +17,14 @@ from fluke.algorithms import CentralizedFL, PersonalizedFL  # NOQA
 from fluke.client import Client  # NOQA
 from fluke.comm import ChannelObserver, Message  # NOQA
 from fluke.config import Configuration  # NOQA
-from fluke.data import DataSplitter  # NOQA
+from fluke.data import DataContainer, DataSplitter  # NOQA
 from fluke.data.datasets import Datasets  # NOQA
 from fluke.evaluation import ClassificationEval  # NOQA
 from fluke.nets import MNIST_2NN  # NOQA
 from fluke.server import Server  # NOQA
 from fluke.utils import ClientObserver, ServerObserver, get_class_from_qualified_name  # NOQA
 from fluke.utils.log import Log  # NOQA
+from fluke.algorithms.vertical import VerticalFL  # NOQA
 
 FlukeENV().set_evaluator(ClassificationEval(1, 10))
 FlukeENV().set_eval_cfg(post_fit=True, pre_fit=True)
@@ -205,6 +207,51 @@ def test_centralized_fl():
         assert fl2.server.rounds == fl.server.rounds
 
     shutil.rmtree(f"tests/tmp/tmp_{fl.id}")
+
+
+def test_vertical_fl_smoke():
+    FlukeENV().set_device("cpu")
+    FlukeENV().set_inmemory(True)
+    FlukeENV().set_evaluator(ClassificationEval(1, 2))
+    FlukeENV().set_eval_cfg(server=True, locals=True, pre_fit=False, post_fit=False)
+
+    X_train = torch.randn(96, 12)
+    y_train = ((X_train[:, :3].sum(dim=1) + 0.5 * X_train[:, 6:9].sum(dim=1)) > 0).long()
+    X_test = torch.randn(48, 12)
+    y_test = ((X_test[:, :3].sum(dim=1) + 0.5 * X_test[:, 6:9].sum(dim=1)) > 0).long()
+
+    data = DataContainer(X_train, y_train, X_test, y_test, num_classes=2)
+    splitter = DataSplitter(
+        dataset=data,
+        distribution="vertical_disjoint",
+        client_split=0.1,
+        keep_test=True,
+        server_test=True,
+        dist_args=DDict(feature_splits=[[0, 1, 2, 3], [4, 5, 6, 7, 8, 9, 10, 11]]),
+    )
+    hparams = DDict(
+        model="Medical_VFL",
+        net_args=DDict(embedding_dim=8, client_hidden_dim=12, server_hidden_dim=16, output_size=2, dropout=0.0),
+        client=DDict(
+            batch_size=16,
+            local_epochs=1,
+            loss="CrossEntropyLoss",
+            optimizer=DDict(name="SGD", lr=0.05, momentum=0.0),
+            scheduler=DDict(step_size=1, gamma=1.0),
+        ),
+        server=DDict(),
+    )
+
+    algo = VerticalFL(2, splitter, hparams)
+    log = Log()
+    algo.set_callbacks(log)
+    algo.run(1, 1.0)
+
+    global_metrics = log.tracker.get("global", 1)
+    local_metrics = log.tracker.get("locals", 1)
+    assert "accuracy" in global_metrics
+    assert 0 in local_metrics and 1 in local_metrics
+    assert log.tracker.get("comm", 1) > 0
 
 
 def get_splitter(cfg):
