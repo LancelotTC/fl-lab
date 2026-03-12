@@ -284,6 +284,7 @@ class Datasets:
         # target_col: str = "Recurred",
         filename: str = "smoking.csv",
         target_col: str = "smoking",
+        sensitive_col: str | None = None,
         test_size: float = 0.2,
         seed: int = 42,
     ) -> DataContainer:
@@ -299,6 +300,9 @@ class Datasets:
                 Defaults to ``healthcare_dataset.csv``.
             target_col (str, optional): Target label column in the CSV.
                 Defaults to ``Test Results``.
+            sensitive_col (str | None, optional): Optional sensitive/protected
+                attribute column used for fairness metrics. If not provided, the
+                loader tries common sex/gender columns such as ``Sex`` or ``gender``.
             test_size (float, optional): Test split size. Defaults to 0.2.
             seed (int, optional): Random seed. Defaults to 42.
 
@@ -314,6 +318,24 @@ class Datasets:
 
         X_df = df.drop(columns=[target_col]).copy()
         y_series = df[target_col]
+
+        resolved_sensitive_col = sensitive_col
+        if resolved_sensitive_col is None:
+            for candidate in ("Sex", "sex", "gender", "Gender"):
+                if candidate in X_df.columns:
+                    resolved_sensitive_col = candidate
+                    break
+
+        sensitive_codes = None
+        if resolved_sensitive_col is not None and resolved_sensitive_col in X_df.columns:
+            sensitive_series = X_df[resolved_sensitive_col]
+            if pd.api.types.is_numeric_dtype(sensitive_series):
+                sensitive_numeric = pd.to_numeric(sensitive_series, errors="raise")
+                sensitive_codes, _ = pd.factorize(sensitive_numeric, sort=True)
+            else:
+                sensitive_codes, _ = pd.factorize(sensitive_series, sort=True)
+            if np.unique(sensitive_codes).size != 2:
+                sensitive_codes = None
 
         # Convert all features to numeric while keeping tabular input width stable.
         for col in X_df.columns:
@@ -342,9 +364,23 @@ class Datasets:
         y = y_codes.astype(np.int64)
         n_classes = int(np.unique(y).size)
 
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=seed, stratify=y
-        )
+        if sensitive_codes is not None:
+            X_train, X_test, y_train, y_test, s_train, s_test = train_test_split(
+                X,
+                y,
+                sensitive_codes.astype(np.int64),
+                test_size=test_size,
+                random_state=seed,
+                stratify=y,
+            )
+            train_metadata = {"sensitive": torch.tensor(s_train, dtype=torch.long)}
+            test_metadata = {"sensitive": torch.tensor(s_test, dtype=torch.long)}
+        else:
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, test_size=test_size, random_state=seed, stratify=y
+            )
+            train_metadata = {}
+            test_metadata = {}
 
         return DataContainer(
             torch.tensor(X_train, dtype=torch.float32),
@@ -352,6 +388,8 @@ class Datasets:
             torch.tensor(X_test, dtype=torch.float32),
             torch.tensor(y_test, dtype=torch.long),
             n_classes,
+            train_metadata=train_metadata,
+            test_metadata=test_metadata,
         )
 
     @classmethod

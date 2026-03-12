@@ -152,9 +152,14 @@ def centralized(
         batch_size=cfg.client.batch_size,
         num_labels=data_container.num_classes,
         shuffle=True,
+        metadata=getattr(data_container, "train_metadata", {}),
     )
     test_loader = FastDataLoader(
-        *data_container.test, batch_size=10, num_labels=data_container.num_classes, shuffle=False
+        *data_container.test,
+        batch_size=10,
+        num_labels=data_container.num_classes,
+        shuffle=False,
+        metadata=getattr(data_container, "test_metadata", {}),
     )
 
     hp = cfg.method.hyperparameters

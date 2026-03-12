@@ -573,6 +573,31 @@ def make_bar_plot(
     plt.close(fig)
 
 
+def make_grouped_bar_plot(
+    out_path: Path,
+    title: str,
+    ylabel: str,
+    labels: list[str],
+    series: list[tuple[str, list[float]]],
+) -> None:
+    if not labels or not series:
+        return
+    fig, ax = _new_axes(BAR_FIGSIZE, BAR_MARGINS)
+    xs = np.arange(len(labels))
+    width = 0.35 if len(series) == 2 else 0.8 / max(1, len(series))
+    offsets = (np.arange(len(series)) - (len(series) - 1) / 2.0) * width
+    for idx, (series_label, values) in enumerate(series):
+        ax.bar(xs + offsets[idx], values, width=width, alpha=0.9, label=series_label)
+    ax.set_xticks(xs)
+    ax.set_xticklabels(labels, rotation=30, ha="right")
+    ax.set_title(title)
+    ax.set_ylabel(ylabel)
+    ax.grid(axis="y", alpha=0.25, linestyle="--")
+    ax.legend(fontsize=9)
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+
 def make_epsilon_scatter(out_path: Path, title: str, ylabel: str, pairs: list[tuple[float, float, str]]) -> None:
     if len(pairs) < 2:
         return
@@ -919,6 +944,17 @@ def main() -> int:
             "final EOD",
             labels,
             [0.0 if pd.isna(v) else float(v) for v in summary_df["fairness_final_eod_mean"].tolist()],
+        )
+
+    spd_vals = [0.0 if pd.isna(v) else float(v) for v in summary_df.get("fairness_final_spd_mean", pd.Series(dtype=float)).tolist()]
+    eod_vals = [0.0 if pd.isna(v) else float(v) for v in summary_df.get("fairness_final_eod_mean", pd.Series(dtype=float)).tolist()]
+    if labels and (any(pd.notna(v) for v in summary_df.get("fairness_final_spd_mean", pd.Series(dtype=float)).tolist()) or any(pd.notna(v) for v in summary_df.get("fairness_final_eod_mean", pd.Series(dtype=float)).tolist())):
+        make_grouped_bar_plot(
+            out_dir / "final_fairness_spd_eod_bar.png",
+            "Final SPD and EOD by Run",
+            "fairness metric value",
+            labels,
+            [("SPD", spd_vals), ("EOD", eod_vals)],
         )
 
     runtime_vals = summary_df["run_time_seconds"].tolist()

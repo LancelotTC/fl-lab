@@ -93,3 +93,42 @@ def test_classification_eval():
 if __name__ == "__main__":
     test_classification_eval()
     # 97% coverage for fluke/evaluation.py
+
+
+
+def test_classification_eval_binary_fairness_metrics():
+    loader = FastDataLoader(
+        torch.FloatTensor([[1, 0], [0, 1], [1, 1], [0, 0]]),
+        torch.LongTensor([0, 1, 0, 1]),
+        num_labels=2,
+        batch_size=2,
+        shuffle=False,
+        skip_singleton=False,
+        metadata={"sensitive": torch.LongTensor([0, 0, 1, 1])},
+    )
+
+    class ModelPerfectBinary(torch.nn.Module):
+        def forward(self, x):
+            outputs = []
+            for row in x:
+                if torch.allclose(row, torch.FloatTensor([1, 0])):
+                    outputs.append(torch.FloatTensor([1, 0]))
+                elif torch.allclose(row, torch.FloatTensor([0, 1])):
+                    outputs.append(torch.FloatTensor([0, 1]))
+                elif torch.allclose(row, torch.FloatTensor([1, 1])):
+                    outputs.append(torch.FloatTensor([1, 0]))
+                else:
+                    outputs.append(torch.FloatTensor([0, 1]))
+            return torch.stack(outputs)
+
+    clf_eval = ClassificationEval(eval_every=1, n_classes=2)
+    result = clf_eval.evaluate(1, ModelPerfectBinary(), loader, loss_fn=torch.nn.CrossEntropyLoss())
+
+    assert result["statistical_parity_difference"] == 0.0
+    assert result["equal_opportunity_difference"] == 0.0
+    assert result["tp"] == 2.0
+    assert result["tn"] == 2.0
+    assert result["fp"] == 0.0
+    assert result["fn"] == 0.0
+    assert result["group_0_tp"] == 1.0
+    assert result["group_1_tp"] == 1.0

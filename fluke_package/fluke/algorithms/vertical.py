@@ -102,6 +102,7 @@ class VerticalFL(ObserverSubject):
             self.train_full_y,
             self.client_test_full_X,
             self.client_test_full_y,
+            self.client_test_metadata,
             self.server_test,
         ) = self._prepare_vertical_tensors()
 
@@ -181,13 +182,28 @@ class VerticalFL(ObserverSubject):
 
     def _prepare_vertical_tensors(
         self,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None, FastDataLoader | None]:
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor | None,
+        torch.Tensor | None,
+        dict[str, torch.Tensor],
+        FastDataLoader | None,
+    ]:
         container = self.data_splitter.data_container
+        train_metadata = getattr(container, "train_metadata", {})
+        test_metadata = getattr(container, "test_metadata", {})
         if self.data_splitter.server_test and self.data_splitter.keep_test:
             server_X, server_Y = container.test
+            server_metadata = test_metadata
             client_X, client_Y = container.train
-            client_Xtr, client_Xte, client_Ytr, client_Yte = safe_train_test_split(
-                client_X, client_Y, test_size=self.data_splitter.client_split
+            client_Xtr, client_Xte, client_Ytr, client_Yte, _, client_test_metadata = (
+                DataSplitter._safe_train_test_split_with_metadata(
+                    client_X,
+                    client_Y,
+                    train_metadata,
+                    test_size=self.data_splitter.client_split,
+                )
             )
         elif not self.data_splitter.keep_test:
             Xtr, ytr = container.train
@@ -196,20 +212,40 @@ class VerticalFL(ObserverSubject):
             Y = torch.cat((ytr, yte), dim=0)
             idx = torch.randperm(X.size(0))
             X, Y = X[idx], Y[idx]
+            merged_metadata = DataSplitter._merge_metadata(train_metadata, test_metadata)
+            merged_metadata = {key: value[idx] for key, value in merged_metadata.items()}
             if self.data_splitter.server_test:
-                split = int(round(X.shape[0] * (1.0 - self.data_splitter.server_split)))
-                client_X, server_X = X[:split], X[split:]
-                client_Y, server_Y = Y[:split], Y[split:]
+                (
+                    client_X,
+                    server_X,
+                    client_Y,
+                    server_Y,
+                    _,
+                    server_metadata,
+                ) = DataSplitter._safe_train_test_split_with_metadata(
+                    X,
+                    Y,
+                    merged_metadata,
+                    test_size=self.data_splitter.server_split,
+                )
             else:
                 client_X, client_Y = X, Y
                 server_X, server_Y = None, None
-            client_Xtr, client_Xte, client_Ytr, client_Yte = safe_train_test_split(
-                client_X, client_Y, test_size=self.data_splitter.client_split
+                server_metadata = {}
+            client_Xtr, client_Xte, client_Ytr, client_Yte, _, client_test_metadata = (
+                DataSplitter._safe_train_test_split_with_metadata(
+                    client_X,
+                    client_Y,
+                    client_metadata if self.data_splitter.server_test else merged_metadata,
+                    test_size=self.data_splitter.client_split,
+                )
             )
         else:
             server_X, server_Y = None, None
+            server_metadata = {}
             client_Xtr, client_Ytr = container.train
             client_Xte, client_Yte = container.test
+            client_test_metadata = test_metadata
 
         server_te = (
             FastDataLoader(
@@ -219,11 +255,12 @@ class VerticalFL(ObserverSubject):
                 batch_size=128,
                 shuffle=False,
                 percentage=self.data_splitter.sampling_perc,
+                metadata=server_metadata,
             )
             if self.data_splitter.server_test and server_X is not None and server_Y is not None
             else None
         )
-        return client_Xtr, client_Ytr, client_Xte, client_Yte, server_te
+        return client_Xtr, client_Ytr, client_Xte, client_Yte, client_test_metadata, server_te
 
     def _iter_aligned_batches(self, batch_size: int, shuffle: bool = True):
         n_samples = int(self.train_full_X.shape[0])
@@ -253,6 +290,7 @@ class VerticalFL(ObserverSubject):
             num_labels=self.data_splitter.num_classes,
             batch_size=128,
             shuffle=False,
+            metadata=self.client_test_metadata,
         )
         return evaluator.evaluate(round_id, self.model, full_loader, loss_fn=None, device=self.device)
 
@@ -266,6 +304,7 @@ class VerticalFL(ObserverSubject):
             num_labels=self.data_splitter.num_classes,
             batch_size=128,
             shuffle=False,
+            metadata=self.client_test_metadata,
         )
         evals: dict[int, dict[str, float]] = {}
         for party in self.parties:

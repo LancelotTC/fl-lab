@@ -5,10 +5,10 @@ fluke federation config/medical-data-iid.yaml config/fl-config-svm.yaml logger.l
 
 # DP runs with epsilon sweep.
 # Smaller epsilon means stronger privacy and usually worse utility.
-fluke federation config/medical-data-iid.yaml config/fl-config-svm-dp.yaml hyperparameters.client.target_epsilon=0.2 hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-iid-eps-0p2-mgn-1p0
-fluke federation config/medical-data-iid.yaml config/fl-config-svm-dp.yaml hyperparameters.client.target_epsilon=0.5 hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-iid-eps-0p5-mgn-1p0
-fluke federation config/medical-data-iid.yaml config/fl-config-svm-dp.yaml hyperparameters.client.target_epsilon=1.0 hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-iid-eps-1p0-mgn-1p0
-fluke federation config/medical-data-iid.yaml config/fl-config-svm-dp.yaml hyperparameters.client.target_epsilon=5.0 hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-iid-eps-5p0-mgn-1p0
+fluke federation config/medical-data-iid.yaml config/fl-config-svm-dp.yaml method.hyperparameters.client.target_epsilon=0.2 method.hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-iid-eps-0p2-mgn-1p0
+fluke federation config/medical-data-iid.yaml config/fl-config-svm-dp.yaml method.hyperparameters.client.target_epsilon=0.5 method.hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-iid-eps-0p5-mgn-1p0
+fluke federation config/medical-data-iid.yaml config/fl-config-svm-dp.yaml method.hyperparameters.client.target_epsilon=1.0 method.hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-iid-eps-1p0-mgn-1p0
+fluke federation config/medical-data-iid.yaml config/fl-config-svm-dp.yaml method.hyperparameters.client.target_epsilon=5.0 method.hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-iid-eps-5p0-mgn-1p0
 
 
 # Person B - non-IID Dirichlet runs
@@ -17,10 +17,10 @@ fluke federation config/medical-data-iid.yaml config/fl-config-svm-dp.yaml hyper
 fluke federation config/medical-data-non-iid.yaml config/fl-config-svm.yaml logger.log_dir=runs/medical-SVM-non-iid
 
 # DP runs with epsilon sweep.
-fluke federation config/medical-data-non-iid.yaml config/fl-config-svm-dp.yaml hyperparameters.client.target_epsilon=0.2 hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-non-iid-eps-0p2-mgn-1p0
-fluke federation config/medical-data-non-iid.yaml config/fl-config-svm-dp.yaml hyperparameters.client.target_epsilon=0.5 hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-non-iid-eps-0p5-mgn-1p0
-fluke federation config/medical-data-non-iid.yaml config/fl-config-svm-dp.yaml hyperparameters.client.target_epsilon=1.0 hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-non-iid-eps-1p0-mgn-1p0
-fluke federation config/medical-data-non-iid.yaml config/fl-config-svm-dp.yaml hyperparameters.client.target_epsilon=5.0 hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-non-iid-eps-5p0-mgn-1p0
+fluke federation config/medical-data-non-iid.yaml config/fl-config-svm-dp.yaml method.hyperparameters.client.target_epsilon=0.2 method.hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-non-iid-eps-0p2-mgn-1p0
+fluke federation config/medical-data-non-iid.yaml config/fl-config-svm-dp.yaml method.hyperparameters.client.target_epsilon=0.5 method.hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-non-iid-eps-0p5-mgn-1p0
+fluke federation config/medical-data-non-iid.yaml config/fl-config-svm-dp.yaml method.hyperparameters.client.target_epsilon=1.0 method.hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-non-iid-eps-1p0-mgn-1p0
+fluke federation config/medical-data-non-iid.yaml config/fl-config-svm-dp.yaml method.hyperparameters.client.target_epsilon=5.0 method.hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-non-iid-eps-5p0-mgn-1p0
 
 
 # Vertical disjoint runs (true VFL without overlapping columns)
@@ -30,5 +30,6 @@ fluke federation config/medical-data-vertical-disjoint-5-clients.yaml config/fl-
 
 # Vertical overlap runs (true VFL with overlapping/shared columns)
 fluke federation config/medical-data-vertical-overlap.yaml config/fl-config-vfl.yaml logger.log_dir=runs/medical-vfl-vertical-overlap
+
 # 5 clients
 fluke federation config/medical-data-vertical-overlap-5-clients.yaml config/fl-config-vfl.yaml

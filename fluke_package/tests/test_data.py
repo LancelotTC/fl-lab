@@ -21,7 +21,9 @@ def test_container():
         y_train=torch.randint(0, 10, (100,)),
         X_test=torch.rand(100, 20),
         y_test=torch.randint(0, 10, (100,)),
-        num_classes=10
+        num_classes=10,
+        train_metadata={"sensitive": torch.randint(0, 2, (100,))},
+        test_metadata={"sensitive": torch.randint(0, 2, (100,))},
     )
 
     assert data.train[0].shape == torch.Size([100, 20])
@@ -30,6 +32,32 @@ def test_container():
     assert data.test[1].shape == torch.Size([100])
     assert data.num_classes == 10
     assert data.num_features == 20
+    assert "sensitive" in data.train_metadata
+    assert "sensitive" in data.test_metadata
+
+    meta_container = DataContainer(
+        X_train=torch.rand(12, 4),
+        y_train=torch.randint(0, 2, (12,)),
+        X_test=torch.rand(8, 4),
+        y_test=torch.randint(0, 2, (8,)),
+        num_classes=2,
+        train_metadata={"sensitive": torch.randint(0, 2, (12,))},
+        test_metadata={"sensitive": torch.randint(0, 2, (8,))},
+    )
+    meta_splitter = DataSplitter(
+        dataset=meta_container,
+        distribution="iid",
+        client_split=0.25,
+        sampling_perc=1.0,
+        server_test=True,
+        keep_test=True,
+        server_split=0.0,
+        uniform_test=False,
+    )
+    (meta_ctr, meta_cte), meta_ste = meta_splitter.assign(n_clients=2, batch_size=2)
+    assert "sensitive" in meta_ctr[0].metadata
+    assert "sensitive" in meta_cte[0].metadata
+    assert "sensitive" in meta_ste.metadata
 
     # data.standardize()
 

@@ -1,5 +1,6 @@
 hyperparameters:
     client:
+        clipping: 1.0
         batch_size: 256
         local_epochs: 5
         loss: MultiMarginLoss

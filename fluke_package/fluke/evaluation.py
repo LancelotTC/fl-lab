@@ -222,6 +222,9 @@ class ClassificationEval(Evaluator):
         losses = []
         matrics_values = {k: [] for k in self.metrics.keys()}
         loss, cnt = 0, 0
+        fairness_preds: list[torch.Tensor] = []
+        fairness_targets: list[torch.Tensor] = []
+        fairness_sensitive: list[torch.Tensor] = []
 
         if additional_metrics is None:
             additional_metrics = {}
@@ -235,6 +238,13 @@ class ClassificationEval(Evaluator):
         for data_loader in eval_data_loader:
             if data_loader is None or len(data_loader) == 0:
                 continue
+
+            fairness_offset = 0
+            fairness_tensor = None
+            if isinstance(data_loader, FastDataLoader):
+                fairness_tensor = data_loader.metadata.get("sensitive")
+                if fairness_tensor is not None:
+                    fairness_tensor = fairness_tensor.cpu()
 
             for metric in self.metrics.values():
                 metric.reset()
@@ -253,8 +263,18 @@ class ClassificationEval(Evaluator):
                     if loss_fn is not None:
                         loss += loss_fn(y_hat, y).item()
 
+                y_hat_cpu = y_hat.cpu()
+                y_cpu = y.cpu()
+                preds_cpu = torch.argmax(y_hat_cpu, dim=1)
+                if fairness_tensor is not None:
+                    batch_sensitive = fairness_tensor[fairness_offset : fairness_offset + y_cpu.shape[0]]
+                    fairness_preds.append(preds_cpu)
+                    fairness_targets.append(y_cpu)
+                    fairness_sensitive.append(batch_sensitive)
+                    fairness_offset += y_cpu.shape[0]
+
                 for metric in self.metrics.values():
-                    metric.update(y_hat.cpu(), y.cpu())
+                    metric.update(y_hat_cpu, y_cpu)
 
                 if additional_metrics:
                     for metric in additional_metrics.values():
@@ -292,6 +312,14 @@ class ClassificationEval(Evaluator):
         if loss_fn is not None:
             result["loss"] = np.round(sum(losses) / len(losses), 5).item()
 
+        if fairness_sensitive and self.n_classes == 2:
+            fairness_metrics = _compute_binary_fairness_metrics(
+                torch.cat(fairness_preds),
+                torch.cat(fairness_targets),
+                torch.cat(fairness_sensitive),
+            )
+            result.update(fairness_metrics)
+
         return result
 
     def __str__(self) -> str:
@@ -303,6 +331,68 @@ class ClassificationEval(Evaluator):
     def __repr__(self) -> str:
         return str(self)
 
+
+
+
+def _binary_confusion_counts(preds: torch.Tensor, targets: torch.Tensor) -> dict[str, float]:
+    preds = preds.long()
+    targets = targets.long()
+    tp = int(((preds == 1) & (targets == 1)).sum().item())
+    fp = int(((preds == 1) & (targets == 0)).sum().item())
+    tn = int(((preds == 0) & (targets == 0)).sum().item())
+    fn = int(((preds == 0) & (targets == 1)).sum().item())
+    return {
+        "tp": float(tp),
+        "fp": float(fp),
+        "tn": float(tn),
+        "fn": float(fn),
+    }
+
+
+def _compute_binary_fairness_metrics(
+    preds: torch.Tensor,
+    targets: torch.Tensor,
+    sensitive: torch.Tensor,
+) -> dict[str, float]:
+    unique_groups = torch.unique(sensitive).tolist()
+    if len(unique_groups) != 2:
+        return {}
+
+    unique_groups = sorted(int(group) for group in unique_groups)
+    result = _binary_confusion_counts(preds, targets)
+
+    group_positive_rates: dict[int, float] = {}
+    group_tprs: dict[int, float] = {}
+    for group in unique_groups:
+        mask = sensitive == group
+        if int(mask.sum().item()) == 0:
+            continue
+
+        group_preds = preds[mask]
+        group_targets = targets[mask]
+        group_counts = _binary_confusion_counts(group_preds, group_targets)
+        for key, value in group_counts.items():
+            result[f"group_{group}_{key}"] = value
+
+        positive_rate = float((group_preds == 1).float().mean().item())
+        positives = (group_targets == 1).sum().item()
+        tpr = float("nan") if positives == 0 else float(group_counts["tp"] / positives)
+
+        result[f"group_{group}_positive_rate"] = positive_rate
+        result[f"group_{group}_true_positive_rate"] = tpr
+        group_positive_rates[group] = positive_rate
+        group_tprs[group] = tpr
+
+    g0, g1 = unique_groups
+    if g0 in group_positive_rates and g1 in group_positive_rates:
+        result["statistical_parity_difference"] = (
+            group_positive_rates[g1] - group_positive_rates[g0]
+        )
+    if g0 in group_tprs and g1 in group_tprs:
+        if not (np.isnan(group_tprs[g0]) or np.isnan(group_tprs[g1])):
+            result["equal_opportunity_difference"] = group_tprs[g1] - group_tprs[g0]
+
+    return {k: float(np.round(v, 5)) for k, v in result.items() if not np.isnan(v)}
 
 def _compute_mean(evals: dict[str, float]) -> dict[str, float]:
     df_data = DataFrame(evals.values())

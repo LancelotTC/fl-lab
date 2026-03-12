@@ -53,12 +53,16 @@ class DataContainer:
         y_test: torch.Tensor | None,
         num_classes: int,
         transforms: Optional[callable] = None,
+        train_metadata: Optional[dict[str, torch.Tensor]] = None,
+        test_metadata: Optional[dict[str, torch.Tensor]] = None,
     ):
         if X_train is not None:
             self.train = (X_train, y_train)
             self.test = (X_test, y_test)
             self.num_features = np.prod([i for i in X_train.shape[1:]]).item()
             self.transforms = transforms
+            self.train_metadata = train_metadata or {}
+            self.test_metadata = test_metadata or {}
         self.num_classes = num_classes
 
 
@@ -141,12 +145,18 @@ class FastDataLoader:
         percentage: float = 1.0,
         skip_singleton: bool = True,
         single_batch: bool = False,
+        metadata: Optional[dict[str, torch.Tensor]] = None,
         **kwargs,
     ):
         assert all(
             t.shape[0] == tensors[0].shape[0] for t in tensors
         ), "All tensors must have the same size along the first dimension."
+        if metadata is not None:
+            assert all(
+                value.shape[0] == tensors[0].shape[0] for value in metadata.values()
+            ), "All metadata tensors must have the same size along the first dimension."
         self.tensors: Sequence[torch.Tensor] = tensors
+        self.metadata: dict[str, torch.Tensor] = metadata or {}
         self.num_labels: int = num_labels
         self.max_size = self.tensors[0].shape[0]
         self.percentage: float = percentage
@@ -217,6 +227,7 @@ class FastDataLoader:
         if self.size < self.max_size:
             r = torch.randperm(self.max_size)
             self.tensors = [t[r] for t in self.tensors]
+            self.metadata = {key: value[r] for key, value in self.metadata.items()}
 
         return self.size
 
@@ -251,6 +262,7 @@ class FastDataLoader:
         if self.shuffle:
             r = torch.randperm(self.size)
             self.tensors = [t[r] for t in self.tensors]
+            self.metadata = {key: value[r] for key, value in self.metadata.items()}
         self.__i = 0
         return self
 
@@ -391,35 +403,69 @@ class DataSplitter:
             return (clients_tr, clients_te), self.data_container.server_data
 
         transforms = self.data_container.transforms
+        train_metadata = getattr(self.data_container, "train_metadata", {})
+        test_metadata = getattr(self.data_container, "test_metadata", {})
+
         if self.server_test and self.keep_test:
             server_X, server_Y = self.data_container.test
+            server_metadata = test_metadata
             client_X, client_Y = self.data_container.train
-            client_Xtr, client_Xte, client_Ytr, client_Yte = safe_train_test_split(
-                client_X, client_Y, test_size=self.client_split
+            client_metadata = train_metadata
+            client_Xtr, client_Xte, client_Ytr, client_Yte, client_meta_tr, client_meta_te = (
+                self._safe_train_test_split_with_metadata(
+                    client_X,
+                    client_Y,
+                    client_metadata,
+                    test_size=self.client_split,
+                )
             )
         elif not self.keep_test:
             Xtr, ytr = self.data_container.train
             Xte, yte = self.data_container.test
+            train_meta = train_metadata
+            test_meta = test_metadata
             # Merge and shuffle the data
             X, Y = torch.cat((Xtr, Xte), dim=0), torch.cat((ytr, yte), dim=0)
             idx = torch.randperm(X.size(0))
             X, Y = X[idx], Y[idx]
+            merged_metadata = self._merge_metadata(train_meta, test_meta)
+            merged_metadata = {key: value[idx] for key, value in merged_metadata.items()}
             # Split the data
             if self.server_test:
-                client_X, server_X, client_Y, server_Y = train_test_split(
-                    X, Y, test_size=self.server_split
+                (
+                    client_X,
+                    server_X,
+                    client_Y,
+                    server_Y,
+                    client_metadata,
+                    server_metadata,
+                ) = self._safe_train_test_split_with_metadata(
+                    X,
+                    Y,
+                    merged_metadata,
+                    test_size=self.server_split,
                 )
             else:
                 server_X, server_Y = None, None
+                server_metadata = {}
                 client_X, client_Y = X, Y
-            client_Xtr, client_Xte, client_Ytr, client_Yte = safe_train_test_split(
-                client_X, client_Y, test_size=self.client_split
+                client_metadata = merged_metadata
+            client_Xtr, client_Xte, client_Ytr, client_Yte, client_meta_tr, client_meta_te = (
+                self._safe_train_test_split_with_metadata(
+                    client_X,
+                    client_Y,
+                    client_metadata,
+                    test_size=self.client_split,
+                )
             )
 
         else:  # keep_test and not server_test
             server_X, server_Y = None, None
+            server_metadata = {}
             client_Xtr, client_Ytr = self.data_container.train
             client_Xte, client_Yte = self.data_container.test
+            client_meta_tr = train_metadata
+            client_meta_te = test_metadata
 
         assignments_tr, assignments_te = self._iidness_functions[self.distribution](
             X_train=client_Xtr,
@@ -441,6 +487,7 @@ class DataSplitter:
 
         for c in range(n_clients):
             Xtr_client, Ytr_client = client_Xtr[assignments_tr[c]], client_Ytr[assignments_tr[c]]
+            train_loader_metadata = self._slice_metadata(client_meta_tr, assignments_tr[c])
             if vfl_feature_splits is not None:
                 Xtr_client = self._apply_vertical_feature_mask(Xtr_client, vfl_feature_splits[c])
             client_tr_assignments.append(
@@ -452,11 +499,13 @@ class DataSplitter:
                     shuffle=True,
                     transforms=transforms,
                     percentage=self.sampling_perc,
+                    metadata=train_loader_metadata,
                 )
             )
             if assignments_te is not None:
                 Xte_client = client_Xte[assignments_te[c]]
                 Yte_client = client_Yte[assignments_te[c]]
+                test_loader_metadata = self._slice_metadata(client_meta_te, assignments_te[c])
                 if vfl_feature_splits is not None:
                     Xte_client = self._apply_vertical_feature_mask(Xte_client, vfl_feature_splits[c])
                 client_te_assignments.append(
@@ -467,6 +516,7 @@ class DataSplitter:
                         batch_size=batch_size,
                         shuffle=False,
                         percentage=self.sampling_perc,
+                        metadata=test_loader_metadata,
                     )
                 )
             else:
@@ -480,11 +530,60 @@ class DataSplitter:
                 batch_size=128,
                 shuffle=False,
                 percentage=self.sampling_perc,
+                metadata=server_metadata,
             )
             if self.server_test
             else None
         )
         return (client_tr_assignments, client_te_assignments), server_te
+
+    @staticmethod
+    def _slice_metadata(
+        metadata: Optional[dict[str, torch.Tensor]],
+        indices: np.ndarray | torch.Tensor | None,
+    ) -> dict[str, torch.Tensor]:
+        if not metadata or indices is None:
+            return {}
+        return {key: value[indices] for key, value in metadata.items()}
+
+    @staticmethod
+    def _merge_metadata(
+        left: Optional[dict[str, torch.Tensor]],
+        right: Optional[dict[str, torch.Tensor]],
+    ) -> dict[str, torch.Tensor]:
+        left = left or {}
+        right = right or {}
+        common_keys = left.keys() & right.keys()
+        return {key: torch.cat((left[key], right[key]), dim=0) for key in common_keys}
+
+    @staticmethod
+    def _safe_train_test_split_with_metadata(
+        X: torch.Tensor,
+        y: torch.Tensor,
+        metadata: Optional[dict[str, torch.Tensor]],
+        test_size: float,
+        client_id: int | None = None,
+    ) -> tuple[
+        torch.Tensor,
+        Optional[torch.Tensor],
+        torch.Tensor,
+        Optional[torch.Tensor],
+        dict[str, torch.Tensor],
+        dict[str, torch.Tensor],
+    ]:
+        if test_size == 0.0:
+            return X, None, y, None, metadata or {}, {}
+
+        idx = torch.arange(X.shape[0])
+        idx_train, idx_test, _, _ = safe_train_test_split(
+            idx,
+            y,
+            test_size=test_size,
+            client_id=client_id,
+        )
+        train_meta = DataSplitter._slice_metadata(metadata, idx_train)
+        test_meta = DataSplitter._slice_metadata(metadata, idx_test)
+        return X[idx_train], X[idx_test], y[idx_train], y[idx_test], train_meta, test_meta
 
     @staticmethod
     def _apply_vertical_feature_mask(X: torch.Tensor, feature_idx: np.ndarray) -> torch.Tensor:
