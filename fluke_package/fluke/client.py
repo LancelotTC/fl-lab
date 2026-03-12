@@ -27,6 +27,16 @@ from .utils.model import ModOpt, safe_load_state_dict  # NOQA
 __all__ = ["Client", "PFLClient"]
 
 
+def _has_eval_examples(test_set: FastDataLoader | DataLoader | None) -> bool:
+    if test_set is None:
+        return False
+    if isinstance(test_set, FastDataLoader):
+        return test_set.size > 0 and test_set.max_size > 0
+    if isinstance(test_set, DataLoader):
+        return len(test_set.dataset) > 0
+    return False
+
+
 class Client(ObserverSubject):
     """Base :class:`Client` class. This class is the base class for all clients in :mod:`fluke`.
     The standard behavior of a client is based on the Federated Averaging algorithm.
@@ -409,7 +419,7 @@ class Client(ObserverSubject):
             the results.
         """
         model = self.model  # ensure to call the retrieve_obj only once
-        if test_set is not None and model is not None:
+        if _has_eval_examples(test_set) and model is not None:
             evaluation = evaluator.evaluate(
                 self._last_round, model, test_set, device=self.device, loss_fn=None
             )
@@ -705,7 +715,7 @@ class PFLClient(Client):
             dict[str, float]: The evaluation results. The keys are the metrics and the values are
             the results.
         """
-        if test_set is not None and self.personalized_model is not None:
+        if _has_eval_examples(test_set) and self.personalized_model is not None:
             return evaluator.evaluate(
                 self._last_round,
                 self.personalized_model,
