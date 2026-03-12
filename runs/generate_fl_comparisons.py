@@ -25,6 +25,32 @@ TIME_TARGET_CONFIGS: Sequence[Tuple[int, int, int]] = (
     (64, 15, 50),
     (64, 15, 25),
 )
+PARAMETER_IMPACT_SPECS = (
+    {
+        "key": "batch_size",
+        "title": "Batch Size Impact",
+        "x_label": "batch_size",
+        "x_getter": lambda cfg: cfg[0],
+        "varying_configs": [(16, 15, 100), (32, 15, 100), (64, 15, 100)],
+        "fixed_label": "local_epochs=15, clients=100%",
+    },
+    {
+        "key": "local_epochs",
+        "title": "Local Epochs Impact",
+        "x_label": "local_epochs",
+        "x_getter": lambda cfg: cfg[1],
+        "varying_configs": [(64, 5, 100), (64, 10, 100), (64, 15, 100)],
+        "fixed_label": "batch_size=64, clients=100%",
+    },
+    {
+        "key": "client_percentage",
+        "title": "Client Percentage Impact",
+        "x_label": "selected_clients_percent",
+        "x_getter": lambda cfg: cfg[2],
+        "varying_configs": [(64, 15, 25), (64, 15, 50), (64, 15, 100)],
+        "fixed_label": "batch_size=64, local_epochs=15",
+    },
+)
 
 
 def parse_config_from_dirname(dirname: str) -> Optional[Tuple[int, int, int]]:
@@ -79,6 +105,22 @@ def read_run_time_seconds(run_metrics_path: Path) -> Optional[float]:
             if row.get("metric") == "run_time_seconds":
                 return float(row["value"])
     return None
+
+
+def read_local_metric_by_client(
+    locals_metrics_path: Path,
+    metric_name: str = "macro_f1",
+) -> Dict[int, Dict[int, float]]:
+    client_to_round_metric: Dict[int, Dict[int, float]] = defaultdict(dict)
+    with locals_metrics_path.open("r", newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None or metric_name not in reader.fieldnames:
+            raise ValueError(f"No {metric_name} column found in {locals_metrics_path}")
+        for row in reader:
+            round_id = int(float(row["round"]))
+            client_id = int(float(row["client"]))
+            client_to_round_metric[client_id][round_id] = float(row[metric_name])
+    return dict(client_to_round_metric)
 
 
 def discover_runs(
@@ -181,6 +223,58 @@ def make_time_plot(
     plt.close()
 
 
+def make_parameter_impact_plot(
+    out_path: Path,
+    title: str,
+    x_label: str,
+    y_label: str,
+    fixed_label: str,
+    x_values: Sequence[int],
+    series_by_model: Dict[str, Sequence[float]],
+) -> None:
+    plt.figure(figsize=(10, 6))
+    for model in MODELS:
+        ys = series_by_model.get(model)
+        if ys is None:
+            continue
+        plt.plot(x_values, ys, marker="o", linewidth=1.8, markersize=4, label=model)
+
+    plt.title(f"{title} | {fixed_label}", fontsize=12)
+    plt.xlabel(x_label)
+    plt.ylabel(y_label)
+    plt.xticks(list(x_values))
+    plt.grid(alpha=0.25, linestyle="--")
+    plt.legend(title="Model")
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=150)
+    plt.close()
+
+
+def make_local_client_plot(
+    out_path: Path,
+    model: str,
+    config: Tuple[int, int, int],
+    client_to_round_metric: Dict[int, Dict[int, float]],
+    metric_name: str = "macro_f1",
+) -> None:
+    plt.figure(figsize=(11, 7))
+    for client_id in sorted(client_to_round_metric):
+        round_to_metric = client_to_round_metric[client_id]
+        rounds = sorted(round_to_metric)
+        ys = [round_to_metric[rnd] for rnd in rounds]
+        plt.plot(rounds, ys, linewidth=1.2, alpha=0.8, label=f"client_{client_id}")
+
+    batch, epochs, frac = config
+    plt.title(f"Local {metric_name} by Client | {model} | config={batch}-{epochs}-{frac}", fontsize=12)
+    plt.xlabel("Round")
+    plt.ylabel(metric_name)
+    plt.grid(alpha=0.25, linestyle="--")
+    plt.legend(title="Client", ncol=2, fontsize=8)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=150)
+    plt.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate FL model comparison metrics and plots.")
     parser.add_argument(
@@ -210,6 +304,7 @@ def main() -> int:
 
     final_f1_summary_rows: List[List[object]] = []
     generated_f1_plots = 0
+    generated_local_client_plots = 0
 
     for config in shared_configs:
         model_to_round_f1: Dict[str, Dict[int, float]] = {}
@@ -252,25 +347,46 @@ def main() -> int:
         for model in MODELS:
             final_f1_summary_rows.append([batch, epochs, frac, model, last_round, model_to_round_f1[model][last_round]])
 
+        for model in MODELS:
+            run_dir = run_index[model].get(config)
+            if run_dir is None:
+                continue
+            locals_metrics_path = run_dir / "locals_metrics.csv"
+            if not locals_metrics_path.exists():
+                continue
+            client_to_round_f1 = read_local_metric_by_client(locals_metrics_path, metric_name=f1_column_name)
+            local_plot_out = out_dir / f"local_clients_{model}_{batch}-{epochs}-{frac}.png"
+            make_local_client_plot(local_plot_out, model, config, client_to_round_f1, metric_name=f1_column_name)
+            generated_local_client_plots += 1
+
     final_summary_csv = out_dir / "final_round_f1_summary.csv"
     with final_summary_csv.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         writer.writerow(["batch_size", "epochs", "client_fraction", "model", "round", "f1"])
         writer.writerows(final_f1_summary_rows)
 
-    # Build time table for target configurations.
-    time_table: Dict[str, Dict[Tuple[int, int, int], Optional[float]]] = {m: {} for m in MODELS}
+    final_f1_lookup: Dict[str, Dict[Tuple[int, int, int], float]] = {m: {} for m in MODELS}
+    for batch, epochs, frac, model, _round, f1 in final_f1_summary_rows:
+        final_f1_lookup[model][(int(batch), int(epochs), int(frac))] = float(f1)
+
+    # Build run time lookup for all shared configurations.
+    time_lookup: Dict[str, Dict[Tuple[int, int, int], Optional[float]]] = {m: {} for m in MODELS}
     for model in MODELS:
-        for cfg in TIME_TARGET_CONFIGS:
+        for cfg in shared_configs:
             run_dir = run_index.get(model, {}).get(cfg)
             if run_dir is None:
-                time_table[model][cfg] = None
+                time_lookup[model][cfg] = None
                 continue
             run_metrics_path = run_dir / "run_metrics.csv"
             if not run_metrics_path.exists():
-                time_table[model][cfg] = None
+                time_lookup[model][cfg] = None
                 continue
-            time_table[model][cfg] = read_run_time_seconds(run_metrics_path)
+            time_lookup[model][cfg] = read_run_time_seconds(run_metrics_path)
+
+    time_table: Dict[str, Dict[Tuple[int, int, int], Optional[float]]] = {m: {} for m in MODELS}
+    for model in MODELS:
+        for cfg in TIME_TARGET_CONFIGS:
+            time_table[model][cfg] = time_lookup[model].get(cfg)
 
     time_metrics_csv = out_dir / "run_time_64-15-100_50_25.csv"
     with time_metrics_csv.open("w", newline="", encoding="utf-8") as handle:
@@ -284,7 +400,46 @@ def main() -> int:
     time_plot_out = out_dir / "time_comparison_64-15-100_50_25.png"
     make_time_plot(time_plot_out, time_table)
 
+    for spec in PARAMETER_IMPACT_SPECS:
+        configs = spec["varying_configs"]
+        x_values = [spec["x_getter"](cfg) for cfg in configs]
+
+        f1_series_by_model: Dict[str, Sequence[float]] = {}
+        time_series_by_model: Dict[str, Sequence[float]] = {}
+        for model in MODELS:
+            if not all(cfg in final_f1_lookup[model] for cfg in configs):
+                continue
+            if not all(time_lookup.get(model, {}).get(cfg) is not None for cfg in configs):
+                continue
+            f1_series_by_model[model] = [final_f1_lookup[model][cfg] for cfg in configs]
+            time_series_by_model[model] = [time_lookup[model][cfg] for cfg in configs]  # type: ignore[list-item]
+
+        if f1_series_by_model:
+            f1_out = out_dir / f"impact_{spec['key']}_f1.png"
+            make_parameter_impact_plot(
+                f1_out,
+                f"{spec['title']} on Final F1",
+                spec["x_label"],
+                "final_f1",
+                spec["fixed_label"],
+                x_values,
+                f1_series_by_model,
+            )
+
+        if time_series_by_model:
+            time_out = out_dir / f"impact_{spec['key']}_time.png"
+            make_parameter_impact_plot(
+                time_out,
+                f"{spec['title']} on Run Time",
+                spec["x_label"],
+                "run_time_seconds",
+                spec["fixed_label"],
+                x_values,
+                time_series_by_model,
+            )
+
     print(f"Generated {generated_f1_plots} F1 comparison plot(s) in: {out_dir}")
+    print(f"Generated {generated_local_client_plots} local client plot(s) in: {out_dir}")
     print(f"Wrote summary metrics: {final_summary_csv}")
     print(f"Wrote time metrics: {time_metrics_csv}")
     print(f"Wrote time comparison plot: {time_plot_out}")
