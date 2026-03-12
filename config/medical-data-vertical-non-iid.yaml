@@ -5,7 +5,7 @@ data:
         path: ./data
     distribution:
         name: vertical_dir
-        beta: 0.5
+        beta: 0.7
         feature_splits:
             - [0, 1, 2, 3, 4, 5, 6]
             - [7, 8, 9, 10, 11, 12, 13]
@@ -31,4 +31,4 @@ logger:
 protocol:
     eligible_perc: 1.0
     n_clients: 2
-    n_rounds: 50
+    n_rounds: 20
