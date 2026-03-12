@@ -26,7 +26,7 @@ def _maybe_set_input_dim(cfg: Configuration, num_features: int) -> None:
     model_name = cfg.method.hyperparameters.model
     if isinstance(model_name, str):
         model_base = model_name.split(".")[-1]
-        if model_base in {"Adult_LogReg", "Adult_SVM", "Adult_MLP"}:
+        if model_base in {"Adult_LogReg", "Adult_MLP"}:
             if "net_args" not in cfg.method.hyperparameters:
                 cfg.method.hyperparameters.net_args = DDict()
             net_args = cfg.method.hyperparameters.net_args
