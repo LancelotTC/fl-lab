@@ -1,5 +1,5 @@
 """
-Generate federated learning comparison metrics/plots across LogReg, MLP, and SVM runs.
+Generate federated learning comparison metrics/plots across LogReg and MLP runs.
 
 Outputs:
 - Per-common-config F1 line plots and round-wise CSV tables.
@@ -19,7 +19,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import matplotlib.pyplot as plt
 
 
-MODELS: Sequence[str] = ("LogReg", "MLP", "SVM")
+MODELS: Sequence[str] = ("LogReg", "MLP")
 TIME_TARGET_CONFIGS: Sequence[Tuple[int, int, int]] = (
     (64, 15, 100),
     (64, 15, 50),
@@ -299,7 +299,7 @@ def main() -> int:
     shared_configs = common_configs(run_index)
 
     if not shared_configs:
-        print("No common configurations found across LogReg, MLP, and SVM.")
+        print("No common configurations found across LogReg and MLP.")
         return 1
 
     final_f1_summary_rows: List[List[object]] = []

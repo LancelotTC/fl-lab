@@ -34,7 +34,6 @@ __all__ = [
     "FedBN_CNN_D",
     "MNIST_LR",
     "Adult_LogReg",
-    "Adult_SVM",
     "Adult_MLP",
     "CifarConv2",
     "CifarConv2_E",
@@ -551,20 +550,6 @@ class MNIST_LR(nn.Module):
 
 class Adult_LogReg(nn.Module):
     """Logistic regression for tabular datasets like Adult."""
-
-    def __init__(self, input_dim: int | None = None, output_size: int = 2):
-        super().__init__()
-        if input_dim is None:
-            self.fc = nn.LazyLinear(output_size)
-        else:
-            self.fc = nn.Linear(input_dim, output_size)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.fc(x)
-
-
-class Adult_SVM(nn.Module):
-    """Linear SVM-style classifier for tabular datasets like Adult."""
 
     def __init__(self, input_dim: int | None = None, output_size: int = 2):
         super().__init__()

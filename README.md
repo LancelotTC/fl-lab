@@ -277,9 +277,8 @@ Datasets._DATASET_MAP = {
 
 ### 7.2 Tabular models (added to Fluke)
 
-We add three tabular models to `fluke/nets.py`:
+We add two tabular models to `fluke/nets.py`:
 - Logistic Regression (Adult_LogReg)
-- Linear SVM (Adult_SVM)
 - MLP (Adult_MLP)
 
 These models are simple and compatible with FedAvg.
@@ -287,19 +286,6 @@ These models are simple and compatible with FedAvg.
 ```python
 class Adult_LogReg(nn.Module):
     """Logistic regression for tabular datasets like Adult."""
-
-    def __init__(self, input_dim: int | None = None, output_size: int = 2):
-        super().__init__()
-        if input_dim is None:
-            self.fc = nn.LazyLinear(output_size)
-        else:
-            self.fc = nn.Linear(input_dim, output_size)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.fc(x)
-
-class Adult_SVM(nn.Module):
-    """Linear SVM-style classifier for tabular datasets like Adult."""
 
     def __init__(self, input_dim: int | None = None, output_size: int = 2):
         super().__init__()
@@ -336,7 +322,7 @@ def _maybe_set_input_dim(cfg: Configuration, num_features: int) -> None:
     model_name = cfg.method.hyperparameters.model
     if isinstance(model_name, str):
         model_base = model_name.split(".")[-1]
-        if model_base in {"Adult_LogReg", "Adult_SVM", "Adult_MLP"}:
+        if model_base in {"Adult_LogReg", "Adult_MLP"}:
             if "net_args" not in cfg.method.hyperparameters:
                 cfg.method.hyperparameters.net_args = DDict()
             net_args = cfg.method.hyperparameters.net_args

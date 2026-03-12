@@ -11,7 +11,7 @@ hyperparameters:
         scheduler:
             gamma: 1
             step_size: 1
-    model: Adult_SVM
+    model: Adult_LogReg
     net_args:
         input_dim: 14
     server:
