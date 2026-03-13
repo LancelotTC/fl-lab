@@ -1,13 +1,13 @@
 hyperparameters:
     client:
-        clipping: 1.0
+        clipping: 0.1
         batch_size: 256
         local_epochs: 5
         loss: MultiMarginLoss
         optimizer:
             lr: 0.001
             momentum: 0.9
-            weight_decay: 1.0e-03
+            weight_decay: 0.001
         persistency: true
         scheduler:
             gamma: 1
@@ -18,4 +18,5 @@ hyperparameters:
     server:
         weighted: true
         lr: 1.0
-name: fluke.algorithms.fedavg.FedAVG
+        global_step: 1.0
+name: fluke.algorithms.scaffold.SCAFFOLD

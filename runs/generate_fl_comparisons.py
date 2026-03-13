@@ -1,7 +1,7 @@
 """
 Generate FL comparison artifacts focused on:
-- quality (global metrics),
-- fairness (cross-client disparity),
+- predictive metrics (Macro-F1/Micro-F1/Accuracy),
+- fairness (SPD/EOD),
 - cost (runtime + communication),
 - privacy tags (DP epsilon inferred from run naming).
 
@@ -36,6 +36,11 @@ RUN_METRICS_FILE = "run_metrics.csv"
 COMM_COSTS_FILE = "comm_costs.csv"
 
 QUALITY_METRICS = ("macro_f1", "micro_f1", "accuracy")
+SERVER_CLIENT_QUALITY_METRIC_PAIRS = (
+    ("macro_f1", "client_macro_f1_mean"),
+    ("micro_f1", "client_micro_f1_mean"),
+    ("accuracy", "client_accuracy_mean"),
+)
 KNOWN_DATASETS = (
     "medical",
     "adult",
@@ -127,6 +132,25 @@ def first_existing_col(df: pd.DataFrame, candidates: tuple[str, ...]) -> Optiona
     for c in candidates:
         if c in df.columns:
             return c
+    return None
+
+
+def pretty_metric_name(metric: str) -> str:
+    mapping = {
+        "macro_f1": "Macro-F1",
+        "micro_f1": "Micro-F1",
+        "accuracy": "Accuracy",
+        "client_macro_f1_mean": "Client Mean Macro-F1",
+        "client_micro_f1_mean": "Client Mean Micro-F1",
+        "client_accuracy_mean": "Client Mean Accuracy",
+    }
+    return mapping.get(metric, metric)
+
+
+def choose_metric_for_df(df: pd.DataFrame, candidates: tuple[str, ...]) -> Optional[str]:
+    for col in candidates:
+        if col in df.columns and df[col].notna().any():
+            return col
     return None
 
 
@@ -407,7 +431,7 @@ def read_round_loss(run_dir: Path) -> Optional[pd.DataFrame]:
                 return out.sort_values("round")
 
     sources = [
-        (run_dir / "metrics.csv", ("train_loss", "loss", "fit_loss", "client_loss")),
+        (run_dir / "metrics.csv", ("train_loss", "vfl/train_loss", "loss", "fit_loss", "client_loss")),
         (run_dir / "local_test_metrics.csv", ("loss",)),
         (run_dir / "postfit_metrics.csv", ("loss",)),
         (run_dir / "prefit_metrics.csv", ("loss",)),
@@ -558,6 +582,7 @@ def make_bar_plot(
     ylabel: str,
     labels: list[str],
     values: list[float],
+    yscale: str = "linear",
 ) -> None:
     if not labels:
         return
@@ -568,6 +593,8 @@ def make_bar_plot(
     ax.set_xticklabels(labels, rotation=30, ha="right")
     ax.set_title(title)
     ax.set_ylabel(ylabel)
+    if yscale != "linear":
+        ax.set_yscale(yscale)
     ax.grid(axis="y", alpha=0.25, linestyle="--")
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
@@ -623,7 +650,7 @@ def concat_drop_all_na(frames: list[pd.DataFrame]) -> pd.DataFrame:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate quality/fairness/cost FL comparisons.")
+    parser = argparse.ArgumentParser(description="Generate predictive-metric/fairness/cost FL comparisons.")
     parser.add_argument(
         "--runs-dir",
         type=Path,
@@ -650,6 +677,21 @@ def main() -> int:
     runs_dir = args.runs_dir.resolve()
     out_dir = args.out_dir.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Remove deprecated artifacts so old non-SPD/EOD fairness and old naming do not linger.
+    stale_plot_files = (
+        "fairness_acc_gap_vs_round.png",
+        "final_fairness_acc_gap_bar.png",
+        "dp_epsilon_vs_fairness_acc_gap.png",
+        "quality_metric_vs_round.png",
+        "quality_client_mean_vs_round.png",
+        "quality_server_vs_clients_mean_vs_round.png",
+        "dp_epsilon_vs_quality_macro_f1.png",
+    )
+    for stale_name in stale_plot_files:
+        stale_path = out_dir / stale_name
+        if stale_path.exists():
+            stale_path.unlink()
 
     run_dirs = discover_run_dirs(runs_dir)
     if not run_dirs:
@@ -724,23 +766,38 @@ def main() -> int:
     client_roundwise_csv = out_dir / "roundwise_client_metrics.csv"
     client_roundwise_df.to_csv(client_roundwise_csv, index=False)
 
-    # Quality plot: macro_f1 if available, else accuracy.
+    # Predictive metric plot: Macro-F1 first, then Micro-F1, then Accuracy (per run fallback).
     quality_series = []
+    quality_metrics_used: set[str] = set()
     for r in records:
         run_slice = roundwise_df[roundwise_df["run_label"] == r.run_label]
         if run_slice.empty:
             continue
-        y_col = "macro_f1" if "macro_f1" in run_slice.columns else ("accuracy" if "accuracy" in run_slice.columns else None)
+        y_col = choose_metric_for_df(run_slice, QUALITY_METRICS)
         if y_col is None:
             continue
         s = run_slice.dropna(subset=["round", y_col]).sort_values("round")
         if s.empty:
             continue
-        quality_series.append((r.run_label, s["round"].to_numpy(dtype=float), s[y_col].to_numpy(dtype=float)))
+        quality_metrics_used.add(y_col)
+        quality_series.append(
+            (
+                f"{r.run_label} [{pretty_metric_name(y_col)}]",
+                s["round"].to_numpy(dtype=float),
+                s[y_col].to_numpy(dtype=float),
+            )
+        )
+    if len(quality_metrics_used) == 1:
+        only_metric = next(iter(quality_metrics_used))
+        quality_title = f"{pretty_metric_name(only_metric)} vs Round"
+        quality_ylabel = pretty_metric_name(only_metric)
+    else:
+        quality_title = "Predictive Metric vs Round (mixed by run)"
+        quality_ylabel = "metric value"
     make_line_plot(
-        out_dir / "quality_metric_vs_round.png",
-        "Quality vs Round",
-        "metric value",
+        out_dir / "predictive_metric_vs_round.png",
+        quality_title,
+        quality_ylabel,
         quality_series,
     )
 
@@ -763,107 +820,101 @@ def main() -> int:
         loss_series,
     )
 
-    # Client quality plot: average across clients by round.
+    # Client mean predictive metric by round (same fallback order per run).
     client_quality_series = []
+    client_metrics_used: set[str] = set()
     if not client_roundwise_df.empty:
         for r in records:
             s = client_roundwise_df[client_roundwise_df["run_label"] == r.run_label]
             if s.empty:
                 continue
-            y_col = (
-                "client_macro_f1_mean"
-                if "client_macro_f1_mean" in s.columns
-                else ("client_accuracy_mean" if "client_accuracy_mean" in s.columns else None)
+            y_col = choose_metric_for_df(
+                s,
+                ("client_macro_f1_mean", "client_micro_f1_mean", "client_accuracy_mean"),
             )
             if y_col is None:
                 continue
             s = s.dropna(subset=["round", y_col]).sort_values("round")
             if s.empty:
                 continue
+            client_metrics_used.add(y_col)
             client_quality_series.append(
                 (
-                    r.run_label,
+                    f"{r.run_label} [{pretty_metric_name(y_col)}]",
                     s["round"].to_numpy(dtype=float),
                     s[y_col].to_numpy(dtype=float),
                 )
             )
+    if len(client_metrics_used) == 1:
+        only_metric = next(iter(client_metrics_used))
+        client_title = f"{pretty_metric_name(only_metric)} by Round (Clients Mean)"
+        client_ylabel = pretty_metric_name(only_metric)
+    else:
+        client_title = "Clients Mean Predictive Metric vs Round (mixed by run)"
+        client_ylabel = "metric value"
     make_line_plot(
-        out_dir / "quality_client_mean_vs_round.png",
-        "Client Mean Quality vs Round",
-        "client mean metric value",
+        out_dir / "predictive_client_mean_vs_round.png",
+        client_title,
+        client_ylabel,
         client_quality_series,
     )
 
-    # Overlay plot: server metric vs client mean metric.
+    # Overlay: server metric vs clients-mean metric, with per-run fallback.
     server_client_series = []
+    server_client_metrics_used: set[str] = set()
     if not client_roundwise_df.empty and not roundwise_df.empty:
         for r in records:
             s_server = roundwise_df[roundwise_df["run_label"] == r.run_label]
             s_client = client_roundwise_df[client_roundwise_df["run_label"] == r.run_label]
             if s_server.empty or s_client.empty:
                 continue
-            if "macro_f1" in s_server.columns and "client_macro_f1_mean" in s_client.columns:
-                s_server = s_server.dropna(subset=["round", "macro_f1"]).sort_values("round")
-                s_client = s_client.dropna(subset=["round", "client_macro_f1_mean"]).sort_values(
-                    "round"
-                )
-                if not s_server.empty:
-                    server_client_series.append(
-                        (
-                            f"{r.run_label} [server]",
-                            s_server["round"].to_numpy(dtype=float),
-                            s_server["macro_f1"].to_numpy(dtype=float),
-                        )
-                    )
-                if not s_client.empty:
-                    server_client_series.append(
-                        (
-                            f"{r.run_label} [clients-mean]",
-                            s_client["round"].to_numpy(dtype=float),
-                            s_client["client_macro_f1_mean"].to_numpy(dtype=float),
-                        )
-                    )
-            elif "accuracy" in s_server.columns and "client_accuracy_mean" in s_client.columns:
-                s_server = s_server.dropna(subset=["round", "accuracy"]).sort_values("round")
-                s_client = s_client.dropna(subset=["round", "client_accuracy_mean"]).sort_values(
-                    "round"
-                )
-                if not s_server.empty:
-                    server_client_series.append(
-                        (
-                            f"{r.run_label} [server]",
-                            s_server["round"].to_numpy(dtype=float),
-                            s_server["accuracy"].to_numpy(dtype=float),
-                        )
-                    )
-                if not s_client.empty:
-                    server_client_series.append(
-                        (
-                            f"{r.run_label} [clients-mean]",
-                            s_client["round"].to_numpy(dtype=float),
-                            s_client["client_accuracy_mean"].to_numpy(dtype=float),
-                        )
-                    )
-    make_line_plot(
-        out_dir / "quality_server_vs_clients_mean_vs_round.png",
-        "Server vs Clients-Mean Quality vs Round",
-        "metric value",
-        server_client_series,
-    )
 
-    # Fairness plot: accuracy gap across clients by round.
-    fairness_series = []
-    if not fairness_df.empty and "acc_gap" in fairness_df.columns:
-        for r in records:
-            s = fairness_df[fairness_df["run_label"] == r.run_label].dropna(subset=["round", "acc_gap"]).sort_values("round")
-            if s.empty:
+            selected_pair = None
+            for server_col, client_col in SERVER_CLIENT_QUALITY_METRIC_PAIRS:
+                if (
+                    server_col in s_server.columns
+                    and client_col in s_client.columns
+                    and s_server[server_col].notna().any()
+                    and s_client[client_col].notna().any()
+                ):
+                    selected_pair = (server_col, client_col)
+                    break
+            if selected_pair is None:
                 continue
-            fairness_series.append((r.run_label, s["round"].to_numpy(dtype=float), s["acc_gap"].to_numpy(dtype=float)))
+
+            server_col, client_col = selected_pair
+            server_client_metrics_used.add(server_col)
+            s_server = s_server.dropna(subset=["round", server_col]).sort_values("round")
+            s_client = s_client.dropna(subset=["round", client_col]).sort_values("round")
+
+            if not s_server.empty:
+                server_client_series.append(
+                    (
+                        f"{r.run_label} [server {pretty_metric_name(server_col)}]",
+                        s_server["round"].to_numpy(dtype=float),
+                        s_server[server_col].to_numpy(dtype=float),
+                    )
+                )
+            if not s_client.empty:
+                server_client_series.append(
+                    (
+                        f"{r.run_label} [clients-mean {pretty_metric_name(server_col)}]",
+                        s_client["round"].to_numpy(dtype=float),
+                        s_client[client_col].to_numpy(dtype=float),
+                    )
+                )
+    if len(server_client_metrics_used) == 1:
+        only_metric = next(iter(server_client_metrics_used))
+        server_client_title = f"Server vs Clients Mean {pretty_metric_name(only_metric)}"
+        server_client_ylabel = pretty_metric_name(only_metric)
+    else:
+        server_client_title = "Server vs Clients Mean Predictive Metric (mixed by run)"
+        server_client_ylabel = "metric value"
     make_line_plot(
-        out_dir / "fairness_acc_gap_vs_round.png",
-        "Fairness (Client Accuracy Gap) vs Round",
-        "max(client_acc) - min(client_acc)",
-        fairness_series,
+        out_dir / "predictive_server_vs_clients_mean_vs_round.png",
+        server_client_title,
+        server_client_ylabel,
+        server_client_series,
     )
 
     spd_series = []
@@ -919,15 +970,6 @@ def main() -> int:
                 [0.0 if pd.isna(v) else float(v) for v in vals],
             )
 
-    if "fairness_final_acc_gap" in summary_df.columns and any(pd.notna(v) for v in summary_df["fairness_final_acc_gap"].tolist()):
-        make_bar_plot(
-            out_dir / "final_fairness_acc_gap_bar.png",
-            "Final Fairness Gap (Accuracy) by Run",
-            "final fairness acc gap",
-            labels,
-            [0.0 if pd.isna(v) else float(v) for v in summary_df["fairness_final_acc_gap"].tolist()],
-        )
-
     if "fairness_final_spd_mean" in summary_df.columns and any(pd.notna(v) for v in summary_df["fairness_final_spd_mean"].tolist()):
         make_bar_plot(
             out_dir / "final_fairness_spd_bar.png",
@@ -969,44 +1011,66 @@ def main() -> int:
 
     comm_vals = summary_df["total_comm_cost"].tolist()
     if any(pd.notna(v) for v in comm_vals):
+        comm_numeric = [0.0 if pd.isna(v) else float(v) for v in comm_vals]
         make_bar_plot(
             out_dir / "total_comm_cost_bar.png",
             "Total Communication Cost by Run",
             "total_comm_cost",
             labels,
-            [0.0 if pd.isna(v) else float(v) for v in comm_vals],
+            comm_numeric,
         )
+        if any(v > 0 for v in comm_numeric):
+            make_bar_plot(
+                out_dir / "total_comm_cost_bar_log.png",
+                "Total Communication Cost by Run (log scale)",
+                "total_comm_cost",
+                labels,
+                [max(v, 1.0) for v in comm_numeric],
+                yscale="log",
+            )
 
     # DP trade-off scatter plots.
     epsilon_quality_pairs = []
-    epsilon_fair_pairs = []
+    epsilon_quality_metrics_used: set[str] = set()
     epsilon_cost_pairs = []
     for _, row in summary_df.iterrows():
         epsilon = to_float_or_none(row.get("dp_epsilon"))
         if epsilon is None:
             continue
         label = str(row["run_label"])
-        q = to_float_or_none(row.get("final_macro_f1"))
-        fgap = to_float_or_none(row.get("fairness_final_acc_gap"))
+        q = None
+        q_name = None
+        for key, metric_name in (
+            ("final_macro_f1", "Macro-F1"),
+            ("final_micro_f1", "Micro-F1"),
+            ("final_accuracy", "Accuracy"),
+        ):
+            value = to_float_or_none(row.get(key))
+            if value is not None:
+                q = value
+                q_name = metric_name
+                break
+
         cost = to_float_or_none(row.get("run_time_seconds"))
-        if q is not None:
-            epsilon_quality_pairs.append((epsilon, q, label))
-        if fgap is not None:
-            epsilon_fair_pairs.append((epsilon, fgap, label))
+        if q is not None and q_name is not None:
+            epsilon_quality_pairs.append((epsilon, q, f"{label} [{q_name}]"))
+            epsilon_quality_metrics_used.add(q_name)
         if cost is not None:
             epsilon_cost_pairs.append((epsilon, cost, label))
 
+    if len(epsilon_quality_metrics_used) == 1:
+        only_metric = next(iter(epsilon_quality_metrics_used))
+        eps_quality_title = f"DP Epsilon vs Final {only_metric}"
+        eps_quality_ylabel = f"final {only_metric}"
+    else:
+        eps_quality_title = "DP Epsilon vs Final Predictive Metric (mixed by run)"
+        eps_quality_ylabel = "final metric value"
+
     make_epsilon_scatter(
-        out_dir / "dp_epsilon_vs_quality_macro_f1.png",
-        "DP Epsilon vs Final Macro-F1",
-        "final_macro_f1",
+        out_dir / "dp_epsilon_vs_predictive_metric.png",
+        eps_quality_title,
+        eps_quality_ylabel,
         epsilon_quality_pairs,
-    )
-    make_epsilon_scatter(
-        out_dir / "dp_epsilon_vs_fairness_acc_gap.png",
-        "DP Epsilon vs Final Fairness Gap (Accuracy)",
-        "final fairness acc gap",
-        epsilon_fair_pairs,
     )
     make_epsilon_scatter(
         out_dir / "dp_epsilon_vs_runtime.png",

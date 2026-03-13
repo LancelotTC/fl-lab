@@ -4,12 +4,12 @@ hyperparameters:
         local_epochs: 5
         loss: MultiMarginLoss
         target_epsilon: 100.0
-        target_delta: 1.0e-7
+        target_delta: 1.0e-07
         max_grad_norm: 1.0
         optimizer:
             lr: 0.001
             momentum: 0.9
-            weight_decay: 1.0e-03
+            weight_decay: 0.001
         persistency: true
         scheduler:
             gamma: 1
@@ -20,4 +20,5 @@ hyperparameters:
     server:
         weighted: true
         lr: 1.0
-name: fluke.algorithms.dpfedavg.DPFedAVG
+        global_step: 1.0
+name: fluke.algorithms.dpscaffold.DPSCAFFOLD

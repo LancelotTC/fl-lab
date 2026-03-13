@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import sys
 import uuid
 from collections.abc import Collection
@@ -321,80 +322,105 @@ class VerticalFL(ObserverSubject):
 
         batch_size = int(self.hyper_params.client.batch_size)
         local_epochs = int(self.hyper_params.client.local_epochs)
+        n_samples = int(self.train_full_X.shape[0])
+        steps_per_epoch = max(1, math.ceil(n_samples / max(1, batch_size)))
+        steps_per_round = max(1, local_epochs * steps_per_epoch)
 
-        for round_id in range(1, n_rounds + 1):
-            self.notify(event="start_round", round=round_id, global_model=self.model)
+        with FlukeENV().get_live_renderer():
+            progress_fl = FlukeENV().get_progress_bar("FL")
+            progress_local = FlukeENV().get_progress_bar("clients")
+            task_rounds = progress_fl.add_task("[red]FL Rounds", total=n_rounds)
+            task_local = progress_local.add_task("[green]Local Training", total=steps_per_round)
 
-            for party in self.parties:
-                party.encoder.train()
-            self.head.train()
-
-            running_loss = 0.0
-            n_steps = 0
-            for _ in range(local_epochs):
-                for batch_idx in self._iter_aligned_batches(batch_size=batch_size, shuffle=True):
-                    y = self.train_full_y[batch_idx].to(self.device)
-                    self.head_optimizer.zero_grad()
-                    for party in self.parties:
-                        party.optimizer.zero_grad()
-
-                    embeddings: list[torch.Tensor] = []
-                    for party in self.parties:
-                        local_x = party.train_X[batch_idx].to(self.device)
-                        z = party.encoder(local_x)
-                        z.retain_grad()
-                        embeddings.append(z)
-                        self._send_tensor(z, "embedding", sender=party.index, receiver="server")
-
-                    logits = self.head(torch.cat(embeddings, dim=1))
-                    loss = self._loss_fn(logits, y)
-                    loss.backward()
-
-                    for party, z in zip(self.parties, embeddings):
-                        if z.grad is not None:
-                            self._send_tensor(z.grad, "embedding_grad", sender="server", receiver=party.index)
-
-                    self.head_optimizer.step()
-                    for party in self.parties:
-                        party.optimizer.step()
-
-                    running_loss += float(loss.item())
-                    n_steps += 1
-
-                self.head_scheduler.step()
-                for party in self.parties:
-                    party.scheduler.step()
-
-            if n_steps > 0:
-                self.notify(
-                    event="track_item",
-                    round=round_id,
-                    item="vfl/train_loss",
-                    value=float(running_loss / n_steps),
+            for round_id in range(1, n_rounds + 1):
+                progress_local.update(
+                    task_id=task_local,
+                    completed=0,
+                    total=steps_per_round,
+                    description=f"[green]Round {round_id}/{n_rounds}",
                 )
+                self.notify(event="start_round", round=round_id, global_model=self.model)
 
-            if FlukeENV().get_eval_cfg().server:
-                global_metrics = self._evaluate_global(round_id)
-                if global_metrics:
+                for party in self.parties:
+                    party.encoder.train()
+                self.head.train()
+
+                running_loss = 0.0
+                n_steps = 0
+                for _ in range(local_epochs):
+                    for batch_idx in self._iter_aligned_batches(batch_size=batch_size, shuffle=True):
+                        y = self.train_full_y[batch_idx].to(self.device)
+                        self.head_optimizer.zero_grad()
+                        for party in self.parties:
+                            party.optimizer.zero_grad()
+
+                        embeddings: list[torch.Tensor] = []
+                        for party in self.parties:
+                            local_x = party.train_X[batch_idx].to(self.device)
+                            z = party.encoder(local_x)
+                            z.retain_grad()
+                            embeddings.append(z)
+                            self._send_tensor(z, "embedding", sender=party.index, receiver="server")
+
+                        logits = self.head(torch.cat(embeddings, dim=1))
+                        loss = self._loss_fn(logits, y)
+                        loss.backward()
+
+                        for party, z in zip(self.parties, embeddings):
+                            if z.grad is not None:
+                                self._send_tensor(
+                                    z.grad,
+                                    "embedding_grad",
+                                    sender="server",
+                                    receiver=party.index,
+                                )
+
+                        self.head_optimizer.step()
+                        for party in self.parties:
+                            party.optimizer.step()
+
+                        running_loss += float(loss.item())
+                        n_steps += 1
+                        progress_local.update(task_id=task_local, completed=min(n_steps, steps_per_round))
+
+                    self.head_scheduler.step()
+                    for party in self.parties:
+                        party.scheduler.step()
+
+                if n_steps > 0:
                     self.notify(
-                        event="server_evaluation",
+                        event="track_item",
                         round=round_id,
-                        eval_type="global",
-                        evals=global_metrics,
+                        item="vfl/train_loss",
+                        value=float(running_loss / n_steps),
                     )
 
-            if FlukeENV().get_eval_cfg().locals:
-                local_metrics = self._evaluate_local_views(round_id)
-                if local_metrics:
-                    self.notify(
-                        event="server_evaluation",
-                        round=round_id,
-                        eval_type="locals",
-                        evals=local_metrics,
-                    )
+                if FlukeENV().get_eval_cfg().server:
+                    global_metrics = self._evaluate_global(round_id)
+                    if global_metrics:
+                        self.notify(
+                            event="server_evaluation",
+                            round=round_id,
+                            eval_type="global",
+                            evals=global_metrics,
+                        )
 
-            self.rounds = round_id
-            self.notify(event="end_round", round=round_id)
+                if FlukeENV().get_eval_cfg().locals:
+                    local_metrics = self._evaluate_local_views(round_id)
+                    if local_metrics:
+                        self.notify(
+                            event="server_evaluation",
+                            round=round_id,
+                            eval_type="locals",
+                            evals=local_metrics,
+                        )
+
+                self.rounds = round_id
+                self.notify(event="end_round", round=round_id)
+                progress_fl.update(task_id=task_rounds, completed=round_id)
+
+            progress_fl.remove_task(task_rounds)
+            progress_local.remove_task(task_local)
 
         if finalize:
             self.notify(event="finished", round=self.rounds + 1)

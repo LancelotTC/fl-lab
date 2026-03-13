@@ -34,6 +34,7 @@ __all__ = [
     "ccvr",
     "ditto",
     "dpfedavg",
+    "dpscaffold",
     "decentralized",
     "fat",
     "fedala",

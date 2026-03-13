@@ -48,7 +48,7 @@ def _maybe_set_input_dim(
 
 def _maybe_configure_dp_privacy_budget(cfg: Configuration, train_examples: int) -> None:
     method_name = cfg.method.name
-    if not isinstance(method_name, str) or not method_name.endswith('DPFedAVG'):
+    if not isinstance(method_name, str) or not method_name.endswith(('DPFedAVG', 'DPSCAFFOLD')):
         return
 
     client_hp = cfg.method.hyperparameters.client

@@ -52,6 +52,26 @@ BASELINE_KEY = "baseline"
 RUN_KEY_PREFIX = "run:"
 
 
+def _comparison_style_map(aggregated: dict[tuple[str, str], pd.DataFrame], settings: list[str]) -> dict[tuple[str, str], tuple[object, str]]:
+    style_cycle = ["-", "--", ":", "-."]
+    style_map: dict[tuple[str, str], tuple[object, str]] = {}
+    for setting in settings:
+        keys = ordered_series_keys(aggregated, setting)
+        if not keys:
+            continue
+        cmap = plt.cm.Greens if setting == "vertical-disjoint" else plt.cm.Reds
+        n_keys = max(1, len(keys))
+        for idx, series_key in enumerate(keys):
+            if series_key == BASELINE_KEY:
+                color = "#444444"
+            else:
+                denom = max(1, n_keys - 1)
+                color = cmap(0.45 + 0.45 * (idx / denom))
+            linestyle = style_cycle[idx % len(style_cycle)]
+            style_map[(setting, series_key)] = (color, linestyle)
+    return style_map
+
+
 def _new_axes(figsize: tuple[float, float], margins: dict[str, float]) -> tuple[plt.Figure, plt.Axes]:
     fig, ax = plt.subplots(figsize=figsize)
     fig.subplots_adjust(**margins)
@@ -193,7 +213,7 @@ def load_round_metric_series(run_dir: Path, metric_col: str) -> pd.DataFrame | N
         return None
 
     fallback_sources: list[tuple[str, tuple[str, ...]]] = [
-        ("metrics.csv", ("train_loss", "loss", "fit_loss", "client_loss")),
+        ("metrics.csv", ("train_loss", "vfl/train_loss", "loss", "fit_loss", "client_loss")),
         ("local_test_metrics.csv", ("loss",)),
         ("postfit_metrics.csv", ("loss",)),
         ("prefit_metrics.csv", ("loss",)),
@@ -387,19 +407,18 @@ def plot_metric_for_comparison_group(
         return False
 
     fig, ax = _new_axes(LINE_FIGSIZE, LINE_MARGINS)
-    style_cycle = ["-", "--", ":", "-."]
+    style_map = _comparison_style_map(aggregated, settings)
     plotted = 0
     for idx, (setting, series_key, s) in enumerate(series):
-        if series_key == BASELINE_KEY or series_key.startswith(RUN_KEY_PREFIX):
-            linestyle = "-"
-        else:
-            privacy_idx = max(0, ordered_series_keys(aggregated, setting).index(series_key) - 1)
-            linestyle = style_cycle[privacy_idx % len(style_cycle)]
+        color, linestyle = style_map.get(
+            (setting, series_key),
+            (SETTING_COLORS.get(setting, plt.cm.tab10(idx % 10)), "-"),
+        )
         ax.plot(
             s["round"].to_numpy(dtype=float),
             s[metric_col].to_numpy(dtype=float),
             label=comparison_series_label(setting, series_key, privacy_label),
-            color=SETTING_COLORS.get(setting, plt.cm.tab10(idx % 10)),
+            color=color,
             linestyle=linestyle,
             linewidth=1.9,
         )
