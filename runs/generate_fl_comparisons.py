@@ -93,6 +93,16 @@ PROGRESSION_METRICS = {
 }
 PROGRESSION_BASELINE_KEY = "baseline"
 PROGRESSION_RUN_KEY_PREFIX = "run:"
+PROGRESSION_DEFAULT_OUT_DIR_NAME = "iid_noise_progression"
+LEGACY_STALE_PLOT_FILES = (
+    "fairness_acc_gap_vs_round.png",
+    "final_fairness_acc_gap_bar.png",
+    "dp_epsilon_vs_fairness_acc_gap.png",
+    "quality_metric_vs_round.png",
+    "quality_client_mean_vs_round.png",
+    "quality_server_vs_clients_mean_vs_round.png",
+    "dp_epsilon_vs_quality_macro_f1.png",
+)
 
 
 def _new_axes(figsize: tuple[float, float], margins: dict[str, float]) -> tuple[plt.Figure, plt.Axes]:
@@ -238,6 +248,16 @@ def parse_float_tag(name: str, key: str) -> Optional[float]:
     return to_float_or_none(raw)
 
 
+def parse_dp_tags(name: str) -> tuple[Optional[float], Optional[float]]:
+    epsilon = (
+        parse_float_tag(name, "epsilon")
+        or parse_float_tag(name, "eps")
+        or parse_float_tag(name, "noise")
+    )
+    max_grad_norm = parse_float_tag(name, "mgn") or parse_float_tag(name, "maxgradnorm")
+    return epsilon, max_grad_norm
+
+
 def is_run_dir(path: Path) -> bool:
     if not path.is_dir():
         return False
@@ -293,6 +313,50 @@ def read_total_comm_cost(run_dir: Path) -> Optional[float]:
     if col is None:
         return None
     return to_float_or_none(df[col].sum())
+
+
+def add_run_metadata(df: pd.DataFrame, record: RunRecord) -> pd.DataFrame:
+    tagged = df.copy()
+    tagged["run_label"] = record.run_label
+    tagged["dataset"] = record.dataset
+    tagged["model"] = record.model
+    tagged["setting"] = record.setting
+    tagged["dp_epsilon"] = record.dp_epsilon
+    return tagged
+
+
+def series_has_values(series: pd.Series) -> bool:
+    return series.notna().any()
+
+
+def series_to_plot_values(series: pd.Series) -> list[float]:
+    return [0.0 if pd.isna(value) else float(value) for value in series.tolist()]
+
+
+def remove_stale_plot_files(out_dir: Path) -> None:
+    for stale_name in LEGACY_STALE_PLOT_FILES:
+        stale_path = out_dir / stale_name
+        if stale_path.exists():
+            stale_path.unlink()
+
+
+def resolve_progression_out_dir(out_dir: Path, explicit_dir: Optional[Path]) -> Path:
+    if explicit_dir is not None:
+        return explicit_dir.resolve()
+    return out_dir / PROGRESSION_DEFAULT_OUT_DIR_NAME
+
+
+def resolve_progression_levels(
+    runs_dir: Path,
+    dataset: str,
+    epsilon_levels: Optional[list[float]],
+    noise_levels: Optional[list[float]],
+) -> tuple[list[float], str]:
+    if noise_levels is not None:
+        return noise_levels, "noise"
+    if epsilon_levels is not None:
+        return epsilon_levels, "epsilon"
+    return progression_discover_privacy_levels(runs_dir, dataset)
 
 
 def jain_index(values: np.ndarray) -> Optional[float]:
@@ -534,14 +598,7 @@ def parse_run(
     )
 
     name = run_dir.name
-    epsilon = parse_float_tag(name, "epsilon")
-    if epsilon is None:
-        epsilon = parse_float_tag(name, "eps")
-    if epsilon is None:
-        epsilon = parse_float_tag(name, "noise")
-    mgn = parse_float_tag(name, "mgn")
-    if mgn is None:
-        mgn = parse_float_tag(name, "maxgradnorm")
+    epsilon, mgn = parse_dp_tags(name)
 
     run_label = build_run_label(run_dir, runs_dir)
     rec = RunRecord(
@@ -999,14 +1056,13 @@ def generate_progression_artifacts(
     noise_levels: Optional[list[float]],
 ) -> bool:
     out_dir.mkdir(parents=True, exist_ok=True)
-    if noise_levels is not None:
-        privacy_levels = noise_levels
-        privacy_label = "noise"
-    elif epsilon_levels is not None:
-        privacy_levels = epsilon_levels
-        privacy_label = "epsilon"
-    else:
-        privacy_levels, privacy_label = progression_discover_privacy_levels(runs_dir, dataset)
+    privacy_levels, privacy_label = resolve_progression_levels(
+        runs_dir=runs_dir,
+        dataset=dataset,
+        epsilon_levels=epsilon_levels,
+        noise_levels=noise_levels,
+    )
+    if epsilon_levels is None and noise_levels is None:
         if privacy_levels:
             print(f"Inferred {privacy_label} levels: {', '.join(str(v) for v in privacy_levels)}")
         else:
@@ -1070,7 +1126,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "--progression-out-dir",
         type=Path,
         default=None,
-        help="Optional output directory for progression plots. Defaults to <out-dir>/iid_noise_progression.",
+        help=f"Optional output directory for progression plots. Defaults to <out-dir>/{PROGRESSION_DEFAULT_OUT_DIR_NAME}.",
     )
     parser.add_argument(
         "--dataset",
@@ -1105,22 +1161,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     runs_dir = args.runs_dir.resolve()
     out_dir = args.out_dir.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    progression_out_dir = (args.progression_out_dir.resolve() if args.progression_out_dir is not None else out_dir / "iid_noise_progression")
-
-    # Remove deprecated artifacts so old non-SPD/EOD fairness and old naming do not linger.
-    stale_plot_files = (
-        "fairness_acc_gap_vs_round.png",
-        "final_fairness_acc_gap_bar.png",
-        "dp_epsilon_vs_fairness_acc_gap.png",
-        "quality_metric_vs_round.png",
-        "quality_client_mean_vs_round.png",
-        "quality_server_vs_clients_mean_vs_round.png",
-        "dp_epsilon_vs_quality_macro_f1.png",
-    )
-    for stale_name in stale_plot_files:
-        stale_path = out_dir / stale_name
-        if stale_path.exists():
-            stale_path.unlink()
+    progression_out_dir = resolve_progression_out_dir(out_dir, args.progression_out_dir)
+    remove_stale_plot_files(out_dir)
 
     run_dirs = discover_run_dirs(runs_dir)
     if not run_dirs:
@@ -1140,31 +1182,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             record, gdf, fairness, client_by_round = parse_run(run_dir, runs_dir)
             records.append(record)
 
-            local_global = gdf.copy()
-            local_global["run_label"] = record.run_label
-            local_global["dataset"] = record.dataset
-            local_global["model"] = record.model
-            local_global["setting"] = record.setting
-            local_global["dp_epsilon"] = record.dp_epsilon
-            roundwise_rows.append(local_global)
+            roundwise_rows.append(add_run_metadata(gdf, record))
 
             if fairness is not None and not fairness.empty:
-                local_fair = fairness.copy()
-                local_fair["run_label"] = record.run_label
-                local_fair["dataset"] = record.dataset
-                local_fair["model"] = record.model
-                local_fair["setting"] = record.setting
-                local_fair["dp_epsilon"] = record.dp_epsilon
-                fairness_rows.append(local_fair)
+                fairness_rows.append(add_run_metadata(fairness, record))
 
             if client_by_round is not None and not client_by_round.empty:
-                local_client = client_by_round.copy()
-                local_client["run_label"] = record.run_label
-                local_client["dataset"] = record.dataset
-                local_client["model"] = record.model
-                local_client["setting"] = record.setting
-                local_client["dp_epsilon"] = record.dp_epsilon
-                client_roundwise_rows.append(local_client)
+                client_roundwise_rows.append(add_run_metadata(client_by_round, record))
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{run_dir}: {exc}")
 
@@ -1389,37 +1413,39 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # Bar charts for final values.
     labels = summary_df["run_label"].tolist()
     if "final_macro_f1" in summary_df.columns:
-        vals = [v for v in summary_df["final_macro_f1"].tolist()]
-        if any(pd.notna(v) for v in vals):
+        macro_f1_values = summary_df["final_macro_f1"]
+        if series_has_values(macro_f1_values):
             make_bar_plot(
                 out_dir / "final_macro_f1_bar.png",
                 "Final Macro-F1 by Run",
                 "final_macro_f1",
                 labels,
-                [0.0 if pd.isna(v) else float(v) for v in vals],
+                series_to_plot_values(macro_f1_values),
             )
 
-    if "fairness_final_spd_mean" in summary_df.columns and any(pd.notna(v) for v in summary_df["fairness_final_spd_mean"].tolist()):
+    if "fairness_final_spd_mean" in summary_df.columns and series_has_values(summary_df["fairness_final_spd_mean"]):
         make_bar_plot(
             out_dir / "final_fairness_spd_bar.png",
             "Final Statistical Parity Difference by Run",
             "final SPD",
             labels,
-            [0.0 if pd.isna(v) else float(v) for v in summary_df["fairness_final_spd_mean"].tolist()],
+            series_to_plot_values(summary_df["fairness_final_spd_mean"]),
         )
 
-    if "fairness_final_eod_mean" in summary_df.columns and any(pd.notna(v) for v in summary_df["fairness_final_eod_mean"].tolist()):
+    if "fairness_final_eod_mean" in summary_df.columns and series_has_values(summary_df["fairness_final_eod_mean"]):
         make_bar_plot(
             out_dir / "final_fairness_eod_bar.png",
             "Final Equal Opportunity Difference by Run",
             "final EOD",
             labels,
-            [0.0 if pd.isna(v) else float(v) for v in summary_df["fairness_final_eod_mean"].tolist()],
+            series_to_plot_values(summary_df["fairness_final_eod_mean"]),
         )
 
-    spd_vals = [0.0 if pd.isna(v) else float(v) for v in summary_df.get("fairness_final_spd_mean", pd.Series(dtype=float)).tolist()]
-    eod_vals = [0.0 if pd.isna(v) else float(v) for v in summary_df.get("fairness_final_eod_mean", pd.Series(dtype=float)).tolist()]
-    if labels and (any(pd.notna(v) for v in summary_df.get("fairness_final_spd_mean", pd.Series(dtype=float)).tolist()) or any(pd.notna(v) for v in summary_df.get("fairness_final_eod_mean", pd.Series(dtype=float)).tolist())):
+    spd_series = summary_df.get("fairness_final_spd_mean", pd.Series(dtype=float))
+    eod_series = summary_df.get("fairness_final_eod_mean", pd.Series(dtype=float))
+    spd_vals = series_to_plot_values(spd_series)
+    eod_vals = series_to_plot_values(eod_series)
+    if labels and (series_has_values(spd_series) or series_has_values(eod_series)):
         make_grouped_bar_plot(
             out_dir / "final_fairness_spd_eod_bar.png",
             "Final SPD and EOD by Run",
@@ -1428,19 +1454,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             [("SPD", spd_vals), ("EOD", eod_vals)],
         )
 
-    runtime_vals = summary_df["run_time_seconds"].tolist()
-    if any(pd.notna(v) for v in runtime_vals):
+    runtime_series = summary_df["run_time_seconds"]
+    if series_has_values(runtime_series):
         make_bar_plot(
             out_dir / "run_time_seconds_bar.png",
             "Run Time by Run",
             "run_time_seconds",
             labels,
-            [0.0 if pd.isna(v) else float(v) for v in runtime_vals],
+            series_to_plot_values(runtime_series),
         )
 
-    comm_vals = summary_df["total_comm_cost"].tolist()
-    if any(pd.notna(v) for v in comm_vals):
-        comm_numeric = [0.0 if pd.isna(v) else float(v) for v in comm_vals]
+    comm_series = summary_df["total_comm_cost"]
+    if series_has_values(comm_series):
+        comm_numeric = series_to_plot_values(comm_series)
         make_bar_plot(
             out_dir / "total_comm_cost_bar.png",
             "Total Communication Cost by Run",

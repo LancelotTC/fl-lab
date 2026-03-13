@@ -13,6 +13,10 @@ It currently covers:
 
 The current experiment set is centered on the medical dataset family under `data/medical`.
 
+Dataset source:
+`data/medical/smoking.csv` comes from the Kaggle dataset
+https://www.kaggle.com/datasets/kukuroo3/body-signal-of-smoking
+
 Important note:
 The current `medical` dataset loader default is `data/medical/smoking.csv` with target column `smoking`.
 The configs in `config/` currently rely on that default because they only specify `name: medical` and `path: ./data`.
@@ -318,8 +322,7 @@ Round-wise progression outputs under `runs/plots/iid_noise_progression/`:
 - `roundwise_setting_privacy_metrics.csv`
 
 Important note:
-`runs/plot_iid_noise_progression.py` is now only a compatibility wrapper.
-The real implementation lives in `runs/generate_fl_comparisons.py`.
+All plotting now goes through `runs/generate_fl_comparisons.py`.
 
 ## How to launch runs
 
@@ -396,12 +399,6 @@ python runs/generate_fl_comparisons.py --dataset medical --progression-out-dir r
 python runs/generate_fl_comparisons.py --dataset medical --skip-progression
 ```
 
-Legacy compatibility entry point:
-
-```bash
-python runs/plot_iid_noise_progression.py --dataset medical
-```
-
 ## Important practical notes
 
 - For CLI overrides on the algorithm config, use `method.hyperparameters...`, not `hyperparameters...`.
@@ -410,4 +407,4 @@ python runs/plot_iid_noise_progression.py --dataset medical
 - `Medical_SVM` should be paired with `MultiMarginLoss`.
 - `Medical_ResMLP` should be paired with `CrossEntropyLoss`.
 - Horizontal and vertical communication costs are on very different scales. Use the log-scale communication plot for clearer comparison.
-- The 5-client `vertical-overlap` config currently uses the same feature splits as the 5-client `vertical-disjoint` config. If you want true overlap in that scenario, update the feature index lists accordingly.
+- The 5-client `vertical-overlap` config uses adjacent-party overlap
