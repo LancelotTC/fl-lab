@@ -17,16 +17,16 @@ Dataset source:
 `data/medical/smoking.csv` comes from the Kaggle dataset
 https://www.kaggle.com/datasets/kukuroo3/body-signal-of-smoking
 
-Important note:
+Dataset configuration note:
 The current `medical` dataset loader default is `data/medical/smoking.csv` with target column `smoking`.
-The configs in `config/` currently rely on that default because they only specify `name: medical` and `path: ./data`.
-If you want to use `data/medical/medical.csv`, you must explicitly override `filename` and `target_col` in the dataset config.
+The experiment configs in `config/` rely on that default because they specify `name: medical` and `path: ./data`.
+The alternative file `data/medical/medical.csv` is also present in the repository, but it requires explicit `filename` and `target_col` overrides in the dataset configuration.
 
 ## Main locations
 
 Project-level files:
 
-- `commands.txt`: ready-to-run experiment commands
+- `commands.txt`: experiment command reference used to launch the scenarios documented below
 - `config/`: experiment and method YAML files
 - `data/`: local datasets
 - `runs/`: run outputs, plotting scripts, generated figures and CSV summaries
@@ -100,8 +100,8 @@ Current active method usage in this repository:
 - `fl-config-svm-dp.yaml` uses `fluke.algorithms.dpscaffold.DPSCAFFOLD`
 - `fl-config-vfl.yaml` uses `fluke.algorithms.vertical.VerticalFL`
 
-Important note:
-Although some comments in older conversations or command labels may mention "FedAvg baseline", the current YAML files in `config/` are configured for `SCAFFOLD` and `DPSCAFFOLD`, not plain `FedAVG` and `DPFedAVG`.
+Method configuration note:
+The current YAML files in `config/` are configured for `SCAFFOLD` and `DPSCAFFOLD`, not plain `FedAVG` and `DPFedAVG`.
 
 ## Models used
 
@@ -232,6 +232,7 @@ Sensitive-column detection in the medical loader:
     - `sex`
     - `gender`
     - `Gender`
+This is done in case the dataset is changed and the casing/term used was different.
 
 If the sensitive attribute is binary, the evaluator additionally computes:
 
@@ -322,13 +323,12 @@ Round-wise progression outputs under `runs/plots/iid_noise_progression/`:
     - `Vertical-Comparison/`
 - `roundwise_setting_privacy_metrics.csv`
 
-Important note:
-All plotting now goes through `runs/generate_fl_comparisons.py`.
+Plotting note:
+All plot generation is handled by `runs/generate_fl_comparisons.py`.
 
-## How to launch runs
+## Reproducibility commands
 
-Prerequisite:
-Activate the environment where the `fluke` CLI is available.
+The commands below reproduce the main scenarios discussed in this repository. They assume an environment in which the `fluke` CLI is available.
 
 ### Horizontal IID baseline
 
@@ -384,15 +384,15 @@ fluke federation config/medical-data-vertical-disjoint-5-clients.yaml config/fl-
 fluke federation config/medical-data-vertical-overlap-5-clients.yaml config/fl-config-vfl.yaml logger.log_dir=runs/medical-vfl-vertical-overlap-5-clients
 ```
 
-## How to launch the plotting
+## Plot generation
 
-Recommended unified plotting entry point:
+Primary plotting command:
 
 ```bash
 python runs/generate_fl_comparisons.py --dataset medical
 ```
 
-Optional progression controls:
+Optional plotting variants:
 
 ```bash
 python runs/generate_fl_comparisons.py --dataset medical --epsilon-levels 0.2 0.5 1.0 5.0
@@ -400,12 +400,12 @@ python runs/generate_fl_comparisons.py --dataset medical --progression-out-dir r
 python runs/generate_fl_comparisons.py --dataset medical --skip-progression
 ```
 
-## Important practical notes
+## Implementation notes
 
-- For CLI overrides on the algorithm config, use `method.hyperparameters...`, not `hyperparameters...`.
-- For vertical runs, use `VerticalFL` with a vertical distribution config.
-- Vertical runs require `eligible_perc: 1.0` so that all parties stay aligned.
-- `Medical_SVM` should be paired with `MultiMarginLoss`.
-- `Medical_ResMLP` should be paired with `CrossEntropyLoss`.
-- Horizontal and vertical communication costs are on very different scales. Use the log-scale communication plot for clearer comparison.
-- The 5-client `vertical-overlap` config uses adjacent-party overlap
+- CLI overrides intended for the algorithm configuration use the `method.hyperparameters...` path.
+- Vertical experiments use `VerticalFL` together with a vertical distribution configuration.
+- Vertical runs require `eligible_perc: 1.0` so that all parties remain aligned throughout training.
+- `Medical_SVM` is paired with `MultiMarginLoss` in the horizontal experiments.
+- `Medical_ResMLP` is available as a stronger tabular alternative and is intended to be paired with `CrossEntropyLoss`.
+- Horizontal and vertical communication costs differ by orders of magnitude, which is why both linear-scale and log-scale communication plots are generated.
+- The 5-client `vertical-overlap` configuration uses adjacent-party overlap.
