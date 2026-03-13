@@ -30,6 +30,7 @@ Project-level files:
 - `config/`: experiment and method YAML files
 - `data/`: local datasets
 - `runs/`: run outputs, plotting scripts, generated figures and CSV summaries
+- `diagrams/`: high-level pipeline diagrams for how HFL and VFL work (`HFL Structure.png` and `VFL Structure.png`)
 - `README.md`: this file
 
 Core framework files:
