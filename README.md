@@ -1,490 +1,413 @@
-# Federated Learning - Lab  
+# FL Lab README
 
-This practical session introduces Federated Learning (FL) with the Fluke framework.
-You will learn how to install Fluke, run centralized and federated experiments, analyze CSV traces,
-and add a tabular dataset (Adult) with multiple models (LogReg, SVM, MLP).
+## Overview
 
----
+This repository contains a federated learning experimentation setup built on top of the local `fluke_package` framework.
+It currently covers:
 
-## 1) Getting Started
+- horizontal federated learning on tabular medical data
+- private horizontal federated learning with differential privacy
+- true vertical federated learning with aligned samples and feature splits
+- metric and fairness analysis utilities
+- plotting utilities for run summaries and round-wise progressions
 
-### 1.1 Create and activate a Conda environment
+The current experiment set is centered on the medical dataset family under `data/medical`.
+
+Important note:
+The current `medical` dataset loader default is `data/medical/smoking.csv` with target column `smoking`.
+The configs in `config/` currently rely on that default because they only specify `name: medical` and `path: ./data`.
+If you want to use `data/medical/medical.csv`, you must explicitly override `filename` and `target_col` in the dataset config.
+
+## Main locations
+
+Project-level files:
+
+- `commands.txt`: ready-to-run experiment commands
+- `config/`: experiment and method YAML files
+- `data/`: local datasets
+- `runs/`: run outputs, plotting scripts, generated figures and CSV summaries
+- `README.md`: this file
+
+Core framework files:
+
+- `fluke_package/fluke/run.py`: CLI entry points for centralized, federation, decentralized, and sweep runs
+- `fluke_package/fluke/data/datasets.py`: dataset loaders, including the `medical` loader
+- `fluke_package/fluke/evaluation.py`: evaluation logic and fairness metrics
+- `fluke_package/fluke/utils/log.py`: CSV logging and output file generation
+- `fluke_package/fluke/nets.py`: model definitions
+- `fluke_package/fluke/algorithms/`: FL algorithm implementations
+- `fluke_package/fluke/algorithms/vertical.py`: true VFL implementation
+
+## Configurations and scenarios
+
+### Horizontal scenarios
+
+Scenario files:
+
+- `config/medical-data-iid.yaml`
+- `config/medical-data-non-iid.yaml`
+
+What they define:
+
+- `medical-data-iid.yaml`: horizontal IID split across 10 clients
+- `medical-data-non-iid.yaml`: horizontal non-IID split across 10 clients using Dirichlet distribution with `beta: 1`
+
+Common characteristics:
+
+- 20 rounds
+- all clients eligible each round (`eligible_perc: 1.0`)
+- client local test evaluation enabled
+- server/global evaluation enabled
+- CSV logging enabled
+
+### Vertical scenarios
+
+Scenario files:
+
+- `config/medical-data-vertical-disjoint.yaml`
+- `config/medical-data-vertical-overlap.yaml`
+- `config/medical-data-vertical-disjoint-5-clients.yaml`
+- `config/medical-data-vertical-overlap-5-clients.yaml`
+
+What they define:
+
+- `vertical-disjoint`: aligned samples, feature blocks are disjoint across parties
+- `vertical-overlap`: aligned samples, feature blocks can overlap across parties
+- `*-5-clients.yaml`: same idea with 5 parties and custom feature splits
+
+Important semantic note:
+These vertical modes are not horizontal IID/non-IID variants. They are feature-partition variants:
+
+- `vertical-disjoint` = no shared columns
+- `vertical-overlap` = some shared columns are allowed
+
+### Method configs
+
+Method files:
+
+- `config/fl-config-svm.yaml`
+- `config/fl-config-svm-dp.yaml`
+- `config/fl-config-vfl.yaml`
+
+Current active method usage in this repository:
+
+- `fl-config-svm.yaml` uses `fluke.algorithms.scaffold.SCAFFOLD`
+- `fl-config-svm-dp.yaml` uses `fluke.algorithms.dpscaffold.DPSCAFFOLD`
+- `fl-config-vfl.yaml` uses `fluke.algorithms.vertical.VerticalFL`
+
+Important note:
+Although some comments in older conversations or command labels may mention "FedAvg baseline", the current YAML files in `config/` are configured for `SCAFFOLD` and `DPSCAFFOLD`, not plain `FedAVG` and `DPFedAVG`.
+
+## Models used
+
+Currently used by the active configs:
+
+- `Medical_SVM`
+    - file: `fluke_package/fluke/nets.py`
+    - current horizontal baseline model
+    - linear tabular classifier
+    - paired with `MultiMarginLoss`
+
+- `Medical_VFL`
+    - file: `fluke_package/fluke/nets.py`
+    - split-model factory for true vertical FL
+    - used with `VerticalFL`
+    - creates per-party encoders and a server-side head
+
+Available but not currently used in `commands.txt`:
+
+- `Medical_ResMLP`
+    - file: `fluke_package/fluke/nets.py`
+    - stronger lightweight residual MLP for tabular data
+    - intended to be paired with `CrossEntropyLoss`
+
+## Aggregation / coordination methods used
+
+### SCAFFOLD
+
+Used in:
+
+- horizontal IID baseline runs
+- horizontal non-IID baseline runs
+
+It was used in both IID and non-IID scenarios to make the comparison as valid as possible.
+
+Config file:
+
+- `config/fl-config-svm.yaml`
+
+Why it matters:
+
+- SCAFFOLD is a control-variate-based alternative to FedAvg
+- it reduces client drift, especially under heterogeneity
+- it is the current horizontal non-private baseline in this repo
+
+### DPSCAFFOLD
+
+Used in:
+
+- private horizontal IID runs
+- private horizontal non-IID runs
+
+Config file:
+
+- `config/fl-config-svm-dp.yaml`
+
+Why it matters:
+
+- same SCAFFOLD-style optimization logic
+- adds differential privacy through Opacus on the client side
+- key DP parameters are `target_epsilon`, `target_delta`, and `max_grad_norm`
+
+Important DP note:
+
+- `target_epsilon` is the privacy budget target
+- `target_delta` is the small failure probability term in `(epsilon, delta)`-DP
+- the actual noise level is derived from those values by Opacus
+
+### VerticalFL
+
+Used in:
+
+- vertical disjoint runs
+- vertical overlap runs
+- 5-client vertical variants
+
+Config file:
+
+- `config/fl-config-vfl.yaml`
+
+Why it matters:
+
+- this is a true VFL coordinator, not masked-feature horizontal FL
+- it trains party-specific encoders on aligned samples
+- the server combines embeddings with a server-side head
+- it exchanges embeddings and embedding gradients instead of averaging full client models
+
+How aggregation works in VerticalFL:
+
+- there is no FedAvg-style model averaging step
+- each party computes a local embedding from its own feature subset
+- those embeddings are sent to the server
+- the server concatenates the embeddings and applies the server-side head to produce logits
+- the loss is computed at the server level
+- backpropagation produces gradients with respect to each party embedding
+- the server sends each embedding gradient back to the corresponding party
+- each party updates only its own encoder with its own optimizer
+- the server updates only the server head with its own optimizer
+
+So in VerticalFL, aggregation is really representation fusion at the server, followed by split backpropagation, not parameter averaging across clients.
+
+## Metrics logged and computed
+
+### Standard predictive metrics
+
+Defined in `fluke_package/fluke/evaluation.py`.
+
+Logged metrics include:
+
+- `accuracy`
+- `macro_precision`
+- `macro_recall`
+- `macro_f1`
+- `micro_precision`
+- `micro_recall`
+- `micro_f1`
+- `loss`
+
+### Fairness metrics
+
+Fairness is computed only if a binary sensitive attribute is available.
+
+Sensitive-column detection in the medical loader:
+
+- explicit `sensitive_col` if provided
+- otherwise first match among:
+    - `Sex`
+    - `sex`
+    - `gender`
+    - `Gender`
+
+If the sensitive attribute is binary, the evaluator additionally computes:
+
+- `statistical_parity_difference`
+- `equal_opportunity_difference`
+- `tp`, `fp`, `tn`, `fn`
+- `group_0_tp`, `group_0_fp`, `group_0_tn`, `group_0_fn`
+- `group_1_tp`, `group_1_fp`, `group_1_tn`, `group_1_fn`
+- `group_0_positive_rate`, `group_1_positive_rate`
+- `group_0_true_positive_rate`, `group_1_true_positive_rate`
+
+Formulas:
+
+- `SPD = positive_rate(group_1) - positive_rate(group_0)`
+- `EOD = TPR(group_1) - TPR(group_0)`
+
+### Aggregated fairness summaries used in plots
+
+`runs/generate_fl_comparisons.py` aggregates client-level fairness metrics from `locals_metrics.csv` and produces round-wise and final summaries:
+
+- `fairness_final_spd_mean`
+- `fairness_final_spd_std`
+- `fairness_final_spd_gap`
+- `fairness_final_eod_mean`
+- `fairness_final_eod_std`
+- `fairness_final_eod_gap`
+
+The single fairness value used in final bar plots is the last-round mean across clients.
+
+### Cost and runtime metrics
+
+Logged and later plotted:
+
+- communication costs from `comm_costs.csv`
+- runtime from `run_metrics.csv`
+
+Communication cost is based on message sizes exchanged through the communication channel.
+
+## Files generated by each run
+
+Each run directory under `runs/<run_name>/` may contain:
+
+- `global_metrics.csv`: server/global metrics per round
+- `locals_metrics.csv`: per-client evaluation metrics per round
+- `prefit_metrics.csv`: per-client pre-fit metrics if enabled
+- `postfit_metrics.csv`: per-client post-fit metrics if enabled
+- `comm_costs.csv`: communication cost per round
+- `metrics.csv`: additional logged scalar metrics
+- `local_test_metrics.csv`: client-local evaluation exports when available
+- `shared_test_metrics.csv`: shared-test evaluation exports when available
+- `run_metrics.csv`: run-level scalars such as runtime
+
+## Files generated by the plotting scripts
+
+Primary plotting entry point:
+
+- `runs/generate_fl_comparisons.py`
+
+Main outputs under `runs/plots/`:
+
+- `run_summary.csv`
+- `roundwise_global_metrics.csv`
+- `roundwise_fairness_metrics.csv`
+- `roundwise_client_metrics.csv`
+- `predictive_metric_vs_round.png`
+- `utility_loss_vs_round.png`
+- `predictive_client_mean_vs_round.png`
+- `predictive_server_vs_clients_mean_vs_round.png`
+- `fairness_spd_vs_round.png`
+- `fairness_eod_vs_round.png`
+- `final_macro_f1_bar.png`
+- `final_fairness_spd_bar.png`
+- `final_fairness_eod_bar.png`
+- `final_fairness_spd_eod_bar.png`
+- `run_time_seconds_bar.png`
+- `total_comm_cost_bar.png`
+- `total_comm_cost_bar_log.png`
+- `dp_epsilon_vs_predictive_metric.png`
+- `dp_epsilon_vs_runtime.png`
+
+Round-wise progression outputs under `runs/plots/iid_noise_progression/`:
+
+- one folder per setting:
+    - `Horizontal-IID/`
+    - `Horizontal-NonIID/`
+    - `Vertical-Disjoint/`
+    - `Vertical-Overlap/`
+    - `Vertical-Comparison/`
+- `roundwise_setting_privacy_metrics.csv`
+
+Important note:
+`runs/plot_iid_noise_progression.py` is now only a compatibility wrapper.
+The real implementation lives in `runs/generate_fl_comparisons.py`.
+
+## How to launch runs
+
+Prerequisite:
+Activate the environment where the `fluke` CLI is available.
+
+### Horizontal IID baseline
 
 ```bash
-conda create -n fluke310 python=3.10
-conda activate fluke310
+fluke federation config/medical-data-iid.yaml config/fl-config-svm.yaml logger.log_dir=runs/medical-SVM-iid
 ```
 
-### 1.2 Install Fluke
-
-The Fluke framework is already included in this project under `fluke_package/`. Install it in editable mode:
+### Horizontal IID private sweep
 
 ```bash
-cd fluke_package && pip install -e . && cd ..
+fluke federation config/medical-data-iid.yaml config/fl-config-svm-dp.yaml method.hyperparameters.client.target_epsilon=0.2 method.hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-iid-eps-0p2-mgn-1p0
+fluke federation config/medical-data-iid.yaml config/fl-config-svm-dp.yaml method.hyperparameters.client.target_epsilon=0.5 method.hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-iid-eps-0p5-mgn-1p0
+fluke federation config/medical-data-iid.yaml config/fl-config-svm-dp.yaml method.hyperparameters.client.target_epsilon=1.0 method.hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-iid-eps-1p0-mgn-1p0
+fluke federation config/medical-data-iid.yaml config/fl-config-svm-dp.yaml method.hyperparameters.client.target_epsilon=5.0 method.hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-iid-eps-5p0-mgn-1p0
 ```
 
-This will install all required dependencies and make the `fluke` command available.
-
-### 1.3 Verify the installation
+### Horizontal non-IID baseline
 
 ```bash
-fluke --help
+fluke federation config/medical-data-non-iid.yaml config/fl-config-svm.yaml logger.log_dir=runs/medical-SVM-non-iid
 ```
 
-You should see the Fluke CLI help message with available commands (centralized, federation, decentralized).
-
----
-
-## 2) Project Structure
-
-```
-TP-Fluke-FL/
-├── config/                     # Configuration files for experiments (YAML)
-├── data/                       # Datasets (MNIST, Adult) - gitignored
-├── fluke_package/              # Fluke framework source code
-├── runs/                       # Experiment results and plots - gitignored
-├── csv_fluke_mnist_iid/        # IID experiment CSVs - gitignored
-├── csv_fluke_mnist_noniid/     # Non-IID experiment CSVs - gitignored
-├── README.md                   # This file (main documentation)
-└── README-mooc.md              # MOOC detailed instructions
-```
-
-**Key directories:**
-- `config/` — YAML configuration files for datasets, algorithms, and FL protocols
-- `data/` — Downloaded datasets (MNIST, Adult CSV)
-- `fluke_package/` — Fluke framework implementation (algorithms, models, utilities)
-- `runs/` — Experiment outputs including CSVs, metrics, plots, and analysis notebooks
-
----
-
-## 3) Configuration Files
-
-Fluke uses two YAML files:
-- an **experiment** config (dataset, logging, training settings)
-- an **algorithm** config (model + FL method)
-
-### 2.1 Example `config/exp.yaml` (experiment config)
-
-```yaml
-# Dataset and data splitting options
-data:
-  client_split: 0.2            # Per-client test split ratio
-  dataset:
-    name: mnist                # Dataset name (MNIST here)
-    path: ./data               # Download/storage path
-  distribution:
-    name: dir                  # Non-IID distribution (Dirichlet)
-    beta: 0.02
-  keep_test: true
-  sampling_perc: 1.0
-  server_split: 0.0
-  server_test: true            # Keep a server test set
-  uniform_test: false
-
-# Evaluation options
-eval:
-  eval_every: 1
-  locals: true                 # Server evaluates local models on server test set
-  post_fit: true
-  pre_fit: false
-  server: true                 # Server evaluates global model
-  task: classification
-
-# Global experiment settings
-exp:
-  device: cpu
-  seed: 42
-  inmemory: true
-
-# Logger selection
-logger:
-  name: CsvLog                 # Use CSV logging for all traces
-  log_dir: runs/fluke_mnist_noniid_traces
-
-# FL protocol settings
-protocol:
-  eligible_perc: 1.0           # Fraction of clients sampled each round
-  n_clients: 10
-  n_rounds: 10
-```
-
-### 2.2 Example `config/fedavg.yaml` (algorithm config)
-
-```yaml
-hyperparameters:
-  client:
-    batch_size: 64
-    local_epochs: 5
-    loss: CrossEntropyLoss
-    optimizer:
-      lr: 0.01
-      momentum: 0.9
-      weight_decay: 1.0e-05
-    persistency: true
-    scheduler:
-      gamma: 1
-      step_size: 1
-  model: MNIST_2NN
-  server:
-    weighted: true
-    lr: 1.0
-name: fluke.algorithms.fedavg.FedAVG
-```
-
----
-
-## 4) Running Experiments
-
-### 3.1 Centralized Learning (baseline)
+### Horizontal non-IID private sweep
 
 ```bash
-fluke centralized config/exp.yaml config/fedavg.yaml
+fluke federation config/medical-data-non-iid.yaml config/fl-config-svm-dp.yaml method.hyperparameters.client.target_epsilon=0.2 method.hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-non-iid-eps-0p2-mgn-1p0
+fluke federation config/medical-data-non-iid.yaml config/fl-config-svm-dp.yaml method.hyperparameters.client.target_epsilon=0.5 method.hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-non-iid-eps-0p5-mgn-1p0
+fluke federation config/medical-data-non-iid.yaml config/fl-config-svm-dp.yaml method.hyperparameters.client.target_epsilon=1.0 method.hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-non-iid-eps-1p0-mgn-1p0
+fluke federation config/medical-data-non-iid.yaml config/fl-config-svm-dp.yaml method.hyperparameters.client.target_epsilon=5.0 method.hyperparameters.client.max_grad_norm=1.0 logger.log_dir=runs/medical-dp-svm-non-iid-eps-5p0-mgn-1p0
 ```
 
-### 3.2 Federated Learning (FedAvg)
+### Vertical disjoint
 
 ```bash
-fluke federation config/exp.yaml config/fedavg.yaml
+fluke federation config/medical-data-vertical-disjoint.yaml config/fl-config-vfl.yaml logger.log_dir=runs/medical-vfl-vertical-disjoint
 ```
 
-### 3.3 Decentralized Federated Learning
-
-A decentralized mode is available that exchanges models between clients without a server.
-Use the dedicated command and config:
+### Vertical overlap
 
 ```bash
-fluke decentralized config/exp.yaml config/decentralized_fedavg.yaml
+fluke federation config/medical-data-vertical-overlap.yaml config/fl-config-vfl.yaml logger.log_dir=runs/medical-vfl-vertical-overlap
 ```
 
-To add this mode, three concrete changes are required:
-- Add the CLI command and the `_run_decentralized` runner in `fluke/run.py` so the new mode can be launched from the CLI.
-- Implement the decentralized algorithm in `fluke/algorithms/decentralized.py` with peer‑to‑peer model exchange, neighbor sampling, and multi‑step consensus aggregation.
-- Add a dedicated config in `config/decentralized_fedavg.yaml` that sets `neighbors` and `consensus_steps`, and set:
-  `name: fluke.algorithms.decentralized.DecentralizedFedAvg` so the CLI loads the decentralized class.
-
-Links to the exact source files:
-- `fluke_package/fluke/run.py`
-- `fluke_package/fluke/algorithms/decentralized.py`
-- `fluke_package/config/decentralized_fedavg.yaml`
-
----
-
-## 5) CSV Logging and Traces
-
-Fluke provides multiple loggers (console, TensorBoard, WandB, ClearML, CSV).
-See the logger documentation here:
-- https://makgyver.github.io/fluke/logging.html
-
-In this session we use **CsvLog**, which saves all metrics into CSV files under
-`log_dir`.
-Implementation details can be found in `fluke/utils/log.py`. In practice,
-you only need to set `logger.name: CsvLog` and choose a `logger.log_dir`.
-
-Typical files include:
-- `global_metrics.csv` (global accuracy/F1 per round)
-- `locals_metrics.csv` (client-wise metrics)
-- `prefit_metrics.csv`, `postfit_metrics.csv`
-- `comm_costs.csv` (communication cost per round)
-- `run_metrics.csv` (total runtime in seconds)
-
-Centralized runs write:
-- `metrics.csv`
-
----
-
-## 6) Results – MNIST
-
-The notebook plots MNIST accuracy/F1 and cost metrics across centralized / FL / decentralized.
-
-![MNIST Accuracy](runs/plots/mnist_accuracy.png)
-![MNIST Comm Cost](runs/plots/mnist_comm_cost.png)
-![MNIST Training Time](runs/plots/mnist_train_time.png)
-
-MNIST accuracy is usually highest for centralized learning. Federated and
-Decentralized settings trade performance for privacy and distributed training.
-Communication cost is higher in decentralized settings due to peer‑to‑peer exchanges.
-
----
-
-## 7) Adding a Tabular Dataset: Adult
-
-### 7.1 Dataset loader (added to Fluke)
-
-We add a new loader in `fluke/data/datasets.py`. It reads a local CSV file,
-extracts the label column `income`, splits train/test, and returns a `DataContainer`.
-This enables Adult to be used exactly like built‑in datasets.
-
-```python
-@classmethod
-def ADULT(
-    cls,
-    path: str = "../data",
-    filename: str = "adult.csv",
-    test_size: float = 0.2,
-    seed: int = 42,
-) -> DataContainer:
-    """Load the Adult dataset from a local CSV file.
-
-    Args:
-        path (str, optional): Base path where the dataset is stored. Defaults to ``../data``.
-        filename (str, optional): CSV file name. Defaults to ``adult.csv``.
-        test_size (float, optional): Test split size. Defaults to 0.2.
-        seed (int, optional): Random seed. Defaults to 42.
-
-    Returns:
-        DataContainer: The Adult dataset.
-    """
-    csv_path = os.path.join(path, "adult", filename)
-    df = pd.read_csv(csv_path)
-    if "income" not in df.columns:
-        raise ValueError("Adult dataset CSV must include an 'income' column.")
-
-    X = df.drop(columns=["income"]).to_numpy(dtype=np.float32)
-    y = df["income"].to_numpy(dtype=np.int64)
-
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=test_size, random_state=seed, stratify=y
-    )
-
-    return DataContainer(
-        torch.tensor(X_train, dtype=torch.float32),
-        torch.tensor(y_train, dtype=torch.long),
-        torch.tensor(X_test, dtype=torch.float32),
-        torch.tensor(y_test, dtype=torch.long),
-        2,
-    )
-```
-
-Register the dataset name in `fluke/data/datasets.py`:
-
-```python
-Datasets._DATASET_MAP = {
-    "mnist": Datasets.MNIST,
-    "svhn": Datasets.SVHN,
-    "mnistm": Datasets.MNISTM,
-    "adult": Datasets.ADULT,
-    "femnist": Datasets.FEMNIST,
-    "emnist": Datasets.EMNIST,
-    "cifar10": Datasets.CIFAR10,
-    "cifar100": Datasets.CIFAR100,
-    "tiny_imagenet": Datasets.TINY_IMAGENET,
-    "shakespeare": Datasets.SHAKESPEARE,
-    "fashion_mnist": Datasets.FASHION_MNIST,
-    "cinic10": Datasets.CINIC10,
-    "fcube": Datasets.FCUBE,
-}
-```
-
-### 7.2 Tabular models (added to Fluke)
-
-We add three tabular models to `fluke/nets.py`:
-- Logistic Regression (Adult_LogReg)
-- Linear SVM (Adult_SVM)
-- MLP (Adult_MLP)
-
-These models are simple and compatible with FedAvg.
-
-```python
-class Adult_LogReg(nn.Module):
-    """Logistic regression for tabular datasets like Adult."""
-
-    def __init__(self, input_dim: int | None = None, output_size: int = 2):
-        super().__init__()
-        if input_dim is None:
-            self.fc = nn.LazyLinear(output_size)
-        else:
-            self.fc = nn.Linear(input_dim, output_size)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.fc(x)
-
-class Adult_SVM(nn.Module):
-    """Linear SVM-style classifier for tabular datasets like Adult."""
-
-    def __init__(self, input_dim: int | None = None, output_size: int = 2):
-        super().__init__()
-        if input_dim is None:
-            self.fc = nn.LazyLinear(output_size)
-        else:
-            self.fc = nn.Linear(input_dim, output_size)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.fc(x)
-
-class Adult_MLP(nn.Module):
-    """Simple MLP for tabular datasets like Adult."""
-
-    def __init__(self, input_dim: int, hidden1: int = 64, hidden2: int = 32, output_size: int = 2):
-        super().__init__()
-        self.fc1 = nn.Linear(input_dim, hidden1)
-        self.fc2 = nn.Linear(hidden1, hidden2)
-        self.fc3 = nn.Linear(hidden2, output_size)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        return self.fc3(x)
-```
-
-### 7.3 Auto‑inject input_dim
-
-We inject `input_dim` automatically so the tabular models can be configured
-only by name in YAML.
-
-```python
-def _maybe_set_input_dim(cfg: Configuration, num_features: int) -> None:
-    model_name = cfg.method.hyperparameters.model
-    if isinstance(model_name, str):
-        model_base = model_name.split(".")[-1]
-        if model_base in {"Adult_LogReg", "Adult_SVM", "Adult_MLP"}:
-            if "net_args" not in cfg.method.hyperparameters:
-                cfg.method.hyperparameters.net_args = DDict()
-            net_args = cfg.method.hyperparameters.net_args
-            if "input_dim" not in net_args:
-                net_args["input_dim"] = num_features
-```
-
-### 7.4 Adult config changes
-
-Apply these changes to your existing configs:
-
-`config/exp.yaml` (dataset + logger + protocol)
-
-```yaml
-data:
-  dataset:
-    name: adult
-    path: ./data
-```
-
-`config/fedavg.yaml` for Adult LR
-
-```yaml
-hyperparameters:
-  model: Adult_LogReg
-  net_args:
-    input_dim: 14
-```
-
-`config/fedavg.yaml` for Adult MLP
-
-```yaml
-hyperparameters:
-  model: Adult_MLP
-  net_args:
-    hidden1: 64
-    hidden2: 32
-```
-
----
-
-## 8) Results – Adult LR and Adult MLP
-
-Run centralized, FL, and decentralized experiments:
+### Vertical disjoint with 5 clients
 
 ```bash
-# Adult LR
-fluke centralized config/exp-adult.yaml config/fedavg-adult.yaml
-fluke federation config/exp-adult.yaml config/fedavg-adult.yaml
-fluke decentralized config/exp-adult.yaml config/decentralized_fedavg.yaml
+fluke federation config/medical-data-vertical-disjoint-5-clients.yaml config/fl-config-vfl.yaml logger.log_dir=runs/medical-vfl-vertical-disjoint-5-clients
 ```
 
-![Adult LR Centralized vs FL vs Decentralized](runs/plots/adult_lr_centralized_vs_fl_vs_dec.png) 
-
-Adult LR shows the same trade‑off as MNIST: centralized training typically
-achieves the best accuracy, while federated and decentralized setups increase
-communication and training time.
+### Vertical overlap with 5 clients
 
 ```bash
-# Adult MLP
-fluke centralized config/exp-adult.yaml config/fedavg-adult-mlp.yaml
-fluke federation config/exp-adult.yaml config/fedavg-adult-mlp.yaml
-fluke decentralized config/exp-adult.yaml config/decentralized_fedavg.yaml
+fluke federation config/medical-data-vertical-overlap-5-clients.yaml config/fl-config-vfl.yaml logger.log_dir=runs/medical-vfl-vertical-overlap-5-clients
 ```
 
-![Adult MLP Centralized vs FL vs Decentralized](runs/plots/adult_mlp_centralized_vs_fl_vs_dec.png) 
+## How to launch the plotting
 
-Adult MLP usually reaches higher accuracy than LR, but with higher computation
-cost.  
+Recommended unified plotting entry point:
 
-![Adult LR vs MLP Comm Cost](runs/plots/adult_lr_mlp_comm.png)
-![Adult LR vs MLP Training Time](runs/plots/adult_lr_mlp_time.png) 
-
----
-
-## 9) Cost‑to‑Accuracy
-
-We use cost‑to‑accuracy to quantify how much **communication** and **training time**
-are required to reach a given fraction of the final accuracy (70/80/90/100%).
-This makes cost/performance trade‑offs explicit.
-
-### Adult LR vs Adult MLP (FL)
-
-Cost‑to‑accuracy summarizes how much communication/time is required to reach a
-fraction of the final accuracy (70/80/90/100%). This highlights the trade‑off
-between efficiency and performance.
-
-![Adult Cost-to-Accuracy](runs/plots/adult_cost_to_accuracy.png)
-![Adult Cost-to-Accuracy Time](runs/plots/adult_cost_to_accuracy_time.png)
-
-### MNIST vs Adult (FL)
-
-We also compare MNIST against Adult to show how dataset type impacts
-communication and computation costs.
-
-![MNIST vs Adult](runs/plots/mnist_vs_adult_cost_to_accuracy.png)
-![MNIST vs Adult Time](runs/plots/mnist_vs_adult_cost_to_accuracy_time.png)
-
-MNIST typically reaches higher accuracy faster, while Adult MLP shows higher
-training time due to tabular preprocessing and different optimization dynamics.
-
----
-
-## 10) Advanced Cost Analysis
-
-We evaluate how FL costs change when we vary local epochs or the selected
-client ratio.
-
-### 10.1 Selected Clients (%)
-
-Runs:
-- `runs/fluke_mnist_noniid_traces-cl-20`
-- `runs/fluke_mnist_noniid_traces-cl-40`
-- `runs/fluke_mnist_noniid_traces-cl-60`
-- `runs/fluke_mnist_noniid_traces-cl-80`
-- `runs/fluke_mnist_noniid_traces-cl-100`
-
-Selecting more clients per round increases communication cost, but can stabilize
-training and improve global performance.
-
-![Selected Clients Training Time](runs/plots/mnist_selected_clients_time.png)
-![Selected Clients Comm Cost](runs/plots/mnist_selected_clients_comm.png)
-![Selected Clients Accuracy](runs/plots/mnist_selected_clients_acc.png)
-
-### 10.2 Local Epochs
-
-Runs:
-- `runs/fluke_mnist_noniid_traces-lep-5`
-- `runs/fluke_mnist_noniid_traces-lep-10`
-- `runs/fluke_mnist_noniid_traces-lep-20`
-- `runs/fluke_mnist_noniid_traces-lep-30`
-
-Increasing local epochs often improves accuracy but can increase computation
-cost per round and sometimes degrade generalization under non‑IID data.
-
-
-![Local Epochs Training Time](runs/plots/mnist_local_epochs_time.png)
-![Local Epochs Comm Cost](runs/plots/mnist_local_epochs_comm.png)
-![Local Epochs Accuracy](runs/plots/mnist_local_epochs_acc.png)
-
----
-
-## 11) Reproduce All Plots
-
-Open and run the notebook:
-
-```
-runs/mooc_tp_notebook.ipynb
+```bash
+python runs/generate_fl_comparisons.py --dataset medical
 ```
 
-It is organized in the same order as this README.
+Optional progression controls:
+
+```bash
+python runs/generate_fl_comparisons.py --dataset medical --epsilon-levels 0.2 0.5 1.0 5.0
+python runs/generate_fl_comparisons.py --dataset medical --progression-out-dir runs/plots/iid_noise_progression
+python runs/generate_fl_comparisons.py --dataset medical --skip-progression
+```
+
+Legacy compatibility entry point:
+
+```bash
+python runs/plot_iid_noise_progression.py --dataset medical
+```
+
+## Important practical notes
+
+- For CLI overrides on the algorithm config, use `method.hyperparameters...`, not `hyperparameters...`.
+- For vertical runs, use `VerticalFL` with a vertical distribution config.
+- Vertical runs require `eligible_perc: 1.0` so that all parties stay aligned.
+- `Medical_SVM` should be paired with `MultiMarginLoss`.
+- `Medical_ResMLP` should be paired with `CrossEntropyLoss`.
+- Horizontal and vertical communication costs are on very different scales. Use the log-scale communication plot for clearer comparison.
+- The 5-client `vertical-overlap` config currently uses the same feature splits as the 5-client `vertical-disjoint` config. If you want true overlap in that scenario, update the feature index lists accordingly.

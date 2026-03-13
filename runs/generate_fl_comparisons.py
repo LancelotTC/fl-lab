@@ -22,7 +22,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -65,6 +65,34 @@ SCATTER_FIGSIZE = (8, 6)
 LINE_MARGINS = {"left": 0.11, "right": 0.97, "bottom": 0.13, "top": 0.90}
 BAR_MARGINS = {"left": 0.11, "right": 0.97, "bottom": 0.27, "top": 0.90}
 SCATTER_MARGINS = {"left": 0.14, "right": 0.97, "bottom": 0.13, "top": 0.90}
+
+PROGRESSION_SETTING_META = {
+    "horizontal-iid": {"label": "Horizontal-IID", "dir": "Horizontal-IID"},
+    "horizontal-non-iid": {"label": "Horizontal-NonIID", "dir": "Horizontal-NonIID"},
+    "vertical-disjoint": {"label": "Vertical-Disjoint", "dir": "Vertical-Disjoint"},
+    "vertical-overlap": {"label": "Vertical-Overlap", "dir": "Vertical-Overlap"},
+}
+PROGRESSION_SETTING_COLORS = {
+    "horizontal-iid": "#1f77b4",
+    "horizontal-non-iid": "#ff7f0e",
+    "vertical-disjoint": "#2ca02c",
+    "vertical-overlap": "#d62728",
+}
+PROGRESSION_COMPARISON_GROUPS = {
+    "Vertical-Comparison": {
+        "title": "Vertical Comparison",
+        "settings": ["vertical-disjoint", "vertical-overlap"],
+    },
+}
+PROGRESSION_METRICS = {
+    "accuracy": {"plot_label": "Accuracy", "file_label": "Accuracy"},
+    "macro_f1": {"plot_label": "F1 score (macro)", "file_label": "F1 score"},
+    "macro_precision": {"plot_label": "Precision (macro)", "file_label": "Precision"},
+    "macro_recall": {"plot_label": "Recall (macro)", "file_label": "Recall"},
+    "loss": {"plot_label": "Loss", "file_label": "Loss"},
+}
+PROGRESSION_BASELINE_KEY = "baseline"
+PROGRESSION_RUN_KEY_PREFIX = "run:"
 
 
 def _new_axes(figsize: tuple[float, float], margins: dict[str, float]) -> tuple[plt.Figure, plt.Axes]:
@@ -649,7 +677,382 @@ def concat_drop_all_na(frames: list[pd.DataFrame]) -> pd.DataFrame:
     return pd.concat(cleaned, ignore_index=True)
 
 
-def parse_args() -> argparse.Namespace:
+def progression_parse_privacy_level(name: str) -> Optional[float]:
+    patterns = (
+        r"epsilon[._-]?([0-9]+p[0-9]+|[0-9]+(?:\.[0-9]+)?)",
+        r"eps[._-]?([0-9]+p[0-9]+|[0-9]+(?:\.[0-9]+)?)",
+        r"noise[._-]?([0-9]+p[0-9]+|[0-9]+(?:\.[0-9]+)?)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, name.lower())
+        if not match:
+            continue
+        try:
+            return float(match.group(1).replace("p", "."))
+        except ValueError:
+            return None
+    return None
+
+
+def progression_parse_setting(name: str) -> Optional[str]:
+    lower = name.lower()
+    tokens = [t for t in re.split(r"[^a-z0-9]+", lower) if t]
+    if "vertical" in lower:
+        if "overlap" in lower or "shared" in lower:
+            return "vertical-overlap"
+        if "disjoint" in lower or "without-overlap" in lower:
+            return "vertical-disjoint"
+        if "non-iid" in lower or "noniid" in lower or ("non" in tokens and "iid" in tokens):
+            return "vertical-overlap"
+        if "iid" in tokens:
+            return "vertical-disjoint"
+        return None
+    if "non-iid" in lower or "noniid" in lower or ("non" in tokens and "iid" in tokens):
+        return "horizontal-non-iid"
+    if "iid" in tokens:
+        return "horizontal-iid"
+    return None
+
+
+def canonical_vertical_run_label(name: str) -> Optional[str]:
+    lower = name.lower()
+    if "vertical-overlap" in lower:
+        setting = "vertical-overlap"
+    elif "vertical-disjoint" in lower:
+        setting = "vertical-disjoint"
+    else:
+        return None
+    if "medical" not in lower:
+        return None
+    patterns = (
+        r"(?:^|[^0-9])(\d+)[-_]?clients?(?:[^a-z0-9]|$)",
+        r"clients?[-_ ]?(\d+)",
+        r"n[-_ ]?clients?[-_ ]?(\d+)",
+    )
+    client_count = None
+    for pattern in patterns:
+        match = re.search(pattern, lower)
+        if match:
+            client_count = int(match.group(1))
+            break
+    if client_count is None:
+        return None
+    return f"medical-vfl-{setting}-{client_count}-clients"
+
+
+def progression_infer_privacy_label(name: str) -> Optional[str]:
+    lower = name.lower()
+    if "epsilon" in lower or "eps" in lower:
+        return "epsilon"
+    if "noise" in lower:
+        return "noise"
+    return None
+
+
+def progression_discover_privacy_levels(runs_dir: Path, dataset_filter: str) -> tuple[list[float], str]:
+    levels: set[float] = set()
+    labels: set[str] = set()
+    for run_dir in sorted(runs_dir.iterdir()):
+        if not run_dir.is_dir():
+            continue
+        name = run_dir.name.lower()
+        if dataset_filter and dataset_filter.lower() not in name:
+            continue
+        level = progression_parse_privacy_level(name)
+        if level is None:
+            continue
+        levels.add(level)
+        label = progression_infer_privacy_label(name)
+        if label is not None:
+            labels.add(label)
+    privacy_label = labels.pop() if len(labels) == 1 else "privacy"
+    return sorted(levels), privacy_label
+
+
+def progression_load_round_metric_series(run_dir: Path, metric_col: str) -> Optional[pd.DataFrame]:
+    gpath = run_dir / GLOBAL_METRICS_FILE
+    if gpath.exists():
+        gdf = pd.read_csv(gpath)
+        if metric_col in gdf.columns:
+            if "round" not in gdf.columns:
+                gdf["round"] = np.arange(1, len(gdf) + 1)
+            sdf = gdf[["round", metric_col]].dropna().copy()
+            if not sdf.empty:
+                sdf["round"] = sdf["round"].astype(int)
+                return sdf.sort_values("round")
+    if metric_col != "loss":
+        return None
+    loss_by_round = read_round_loss(run_dir)
+    if loss_by_round is None or loss_by_round.empty:
+        return None
+    return loss_by_round[["round", "loss"]].rename(columns={"loss": metric_col}).sort_values("round")
+
+
+def progression_is_close_to_any(value: float, targets: list[float], tol: float = 1e-9) -> bool:
+    return any(math.isclose(value, target, abs_tol=tol) for target in targets)
+
+
+def progression_aggregate_runs_for_metric(
+    runs_dir: Path,
+    metric_col: str,
+    privacy_levels: list[float],
+    dataset_filter: str,
+) -> dict[tuple[str, str], pd.DataFrame]:
+    series_by_key: dict[tuple[str, str], list[pd.DataFrame]] = {}
+    for run_dir in sorted(runs_dir.iterdir()):
+        if not run_dir.is_dir():
+            continue
+        name = run_dir.name.lower()
+        if dataset_filter and dataset_filter.lower() not in name:
+            continue
+        setting = progression_parse_setting(name)
+        if setting is None:
+            continue
+        privacy_level = progression_parse_privacy_level(name)
+        if privacy_level is None:
+            series_key = (
+                f"{PROGRESSION_RUN_KEY_PREFIX}{run_dir.name}"
+                if setting.startswith("vertical")
+                else PROGRESSION_BASELINE_KEY
+            )
+        else:
+            if privacy_levels and not progression_is_close_to_any(privacy_level, privacy_levels):
+                continue
+            series_key = f"{privacy_level:g}"
+        sdf = progression_load_round_metric_series(run_dir, metric_col)
+        if sdf is None or sdf.empty:
+            continue
+        series_by_key.setdefault((setting, series_key), []).append(sdf)
+    aggregated: dict[tuple[str, str], pd.DataFrame] = {}
+    for key, frames in series_by_key.items():
+        merged = pd.concat(frames, ignore_index=True)
+        aggregated[key] = merged.groupby("round", as_index=False)[metric_col].mean().sort_values("round")
+    return aggregated
+
+
+def progression_ordered_series_keys(aggregated: dict[tuple[str, str], pd.DataFrame], setting: str) -> list[str]:
+    keys = {series_key for current_setting, series_key in aggregated if current_setting == setting}
+    ordered: list[str] = []
+    if PROGRESSION_BASELINE_KEY in keys:
+        ordered.append(PROGRESSION_BASELINE_KEY)
+    run_keys = sorted(k for k in keys if k.startswith(PROGRESSION_RUN_KEY_PREFIX))
+    ordered.extend(run_keys)
+    numeric_keys = sorted((k for k in keys if k not in ordered), key=float)
+    ordered.extend(numeric_keys)
+    return ordered
+
+
+def progression_series_display_label(series_key: str, privacy_label: str) -> str:
+    if series_key == PROGRESSION_BASELINE_KEY:
+        return "baseline"
+    if series_key.startswith(PROGRESSION_RUN_KEY_PREFIX):
+        run_name = series_key[len(PROGRESSION_RUN_KEY_PREFIX):]
+        return canonical_vertical_run_label(run_name) or run_name
+    return f"{privacy_label}={series_key}"
+
+
+def progression_comparison_series_label(setting: str, series_key: str, privacy_label: str) -> str:
+    setting_label = PROGRESSION_SETTING_META[setting]["label"]
+    if series_key == PROGRESSION_BASELINE_KEY:
+        return setting_label
+    return f"{setting_label} | {progression_series_display_label(series_key, privacy_label)}"
+
+
+def progression_comparison_style_map(
+    aggregated: dict[tuple[str, str], pd.DataFrame], settings: list[str]
+) -> dict[tuple[str, str], tuple[object, str]]:
+    style_cycle = ["-", "--", ":", "-."]
+    style_map: dict[tuple[str, str], tuple[object, str]] = {}
+    for setting in settings:
+        keys = progression_ordered_series_keys(aggregated, setting)
+        if not keys:
+            continue
+        cmap = plt.cm.Greens if setting == "vertical-disjoint" else plt.cm.Reds
+        n_keys = max(1, len(keys))
+        for idx, series_key in enumerate(keys):
+            if series_key == PROGRESSION_BASELINE_KEY:
+                color = "#444444"
+            else:
+                denom = max(1, n_keys - 1)
+                color = cmap(0.45 + 0.45 * (idx / denom))
+            linestyle = style_cycle[idx % len(style_cycle)]
+            style_map[(setting, series_key)] = (color, linestyle)
+    return style_map
+
+
+def progression_plot_metric_for_setting(
+    out_path: Path,
+    title: str,
+    y_label: str,
+    metric_col: str,
+    aggregated: dict[tuple[str, str], pd.DataFrame],
+    setting: str,
+    privacy_label: str,
+) -> bool:
+    if not aggregated:
+        return False
+    keys = progression_ordered_series_keys(aggregated, setting)
+    if not keys:
+        return False
+    colors: dict[str, object] = {}
+    run_keys = [k for k in keys if k.startswith(PROGRESSION_RUN_KEY_PREFIX)]
+    numeric_keys = [k for k in keys if k not in run_keys and k != PROGRESSION_BASELINE_KEY]
+    for idx, series_key in enumerate(run_keys):
+        colors[series_key] = plt.cm.tab10(idx % 10)
+    for idx, series_key in enumerate(numeric_keys):
+        colors[series_key] = plt.cm.viridis(idx / max(1, len(numeric_keys) - 1))
+    fig, ax = _new_axes(LINE_FIGSIZE, LINE_MARGINS)
+    plotted = 0
+    for series_key in keys:
+        key = (setting, series_key)
+        if key not in aggregated:
+            continue
+        series_df = aggregated[key]
+        if series_df.empty:
+            continue
+        color = "#444444" if series_key == PROGRESSION_BASELINE_KEY else colors[series_key]
+        linestyle = "--" if series_key == PROGRESSION_BASELINE_KEY else "-"
+        ax.plot(
+            series_df["round"].to_numpy(dtype=float),
+            series_df[metric_col].to_numpy(dtype=float),
+            label=progression_series_display_label(series_key, privacy_label),
+            color=color,
+            linestyle=linestyle,
+            linewidth=1.9,
+        )
+        plotted += 1
+    if plotted == 0:
+        plt.close(fig)
+        return False
+    ax.set_title(title)
+    ax.set_xlabel("FL round")
+    ax.set_ylabel(y_label)
+    if metric_col != "loss":
+        ax.set_ylim(0, 1)
+    ax.grid(alpha=0.25, linestyle="--")
+    ax.legend(fontsize=9)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return True
+
+
+def progression_plot_metric_for_comparison_group(
+    out_path: Path,
+    title: str,
+    y_label: str,
+    metric_col: str,
+    aggregated: dict[tuple[str, str], pd.DataFrame],
+    settings: list[str],
+    privacy_label: str,
+) -> bool:
+    series: list[tuple[str, str, pd.DataFrame]] = []
+    for setting in settings:
+        for series_key in progression_ordered_series_keys(aggregated, setting):
+            key = (setting, series_key)
+            if key not in aggregated:
+                continue
+            series_df = aggregated[key]
+            if series_df.empty:
+                continue
+            series.append((setting, series_key, series_df))
+    if not series:
+        return False
+    fig, ax = _new_axes(LINE_FIGSIZE, LINE_MARGINS)
+    style_map = progression_comparison_style_map(aggregated, settings)
+    plotted = 0
+    for idx, (setting, series_key, series_df) in enumerate(series):
+        color, linestyle = style_map.get(
+            (setting, series_key),
+            (PROGRESSION_SETTING_COLORS.get(setting, plt.cm.tab10(idx % 10)), "-"),
+        )
+        ax.plot(
+            series_df["round"].to_numpy(dtype=float),
+            series_df[metric_col].to_numpy(dtype=float),
+            label=progression_comparison_series_label(setting, series_key, privacy_label),
+            color=color,
+            linestyle=linestyle,
+            linewidth=1.9,
+        )
+        plotted += 1
+    if plotted == 0:
+        plt.close(fig)
+        return False
+    ax.set_title(title)
+    ax.set_xlabel("FL round")
+    ax.set_ylabel(y_label)
+    if metric_col != "loss":
+        ax.set_ylim(0, 1)
+    ax.grid(alpha=0.25, linestyle="--")
+    ax.legend(fontsize=9)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return True
+
+
+def generate_progression_artifacts(
+    runs_dir: Path,
+    out_dir: Path,
+    dataset: str,
+    epsilon_levels: Optional[list[float]],
+    noise_levels: Optional[list[float]],
+) -> bool:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if noise_levels is not None:
+        privacy_levels = noise_levels
+        privacy_label = "noise"
+    elif epsilon_levels is not None:
+        privacy_levels = epsilon_levels
+        privacy_label = "epsilon"
+    else:
+        privacy_levels, privacy_label = progression_discover_privacy_levels(runs_dir, dataset)
+        if privacy_levels:
+            print(f"Inferred {privacy_label} levels: {', '.join(str(v) for v in privacy_levels)}")
+        else:
+            print("No privacy levels were inferred from the available run folders. Plotting baseline runs only where available.")
+    wrote_any = False
+    roundwise_rows: list[pd.DataFrame] = []
+    for metric_col, metric_meta in PROGRESSION_METRICS.items():
+        aggregated = progression_aggregate_runs_for_metric(runs_dir, metric_col, privacy_levels, dataset)
+        if not aggregated:
+            print(f"Skip progression {metric_col}: no matching runs or metric column.")
+            continue
+        for (setting, series_key), df in aggregated.items():
+            tmp = df.copy()
+            tmp["metric"] = metric_col
+            tmp["setting"] = setting
+            tmp["series_key"] = series_key
+            tmp["privacy_level"] = (
+                np.nan
+                if series_key == PROGRESSION_BASELINE_KEY or series_key.startswith(PROGRESSION_RUN_KEY_PREFIX)
+                else float(series_key)
+            )
+            tmp["series_label"] = progression_series_display_label(series_key, privacy_label)
+            tmp["privacy_label"] = (
+                "baseline"
+                if series_key == PROGRESSION_BASELINE_KEY or series_key.startswith(PROGRESSION_RUN_KEY_PREFIX)
+                else privacy_label
+            )
+            roundwise_rows.append(tmp)
+        for setting, meta in PROGRESSION_SETTING_META.items():
+            out_path = out_dir / meta["dir"] / f"{meta['label']} - {metric_meta['file_label']}.png"
+            if progression_plot_metric_for_setting(out_path, f"{meta['label']} | {metric_meta['plot_label']} ({dataset})", metric_meta['plot_label'], metric_col, aggregated, setting, privacy_label):
+                wrote_any = True
+                print(f"Wrote progression plot: {out_path}")
+        for group_dir, group_meta in PROGRESSION_COMPARISON_GROUPS.items():
+            out_path = out_dir / group_dir / f"{group_meta['title']} - {metric_meta['file_label']}.png"
+            if progression_plot_metric_for_comparison_group(out_path, f"{group_meta['title']} | {metric_meta['plot_label']} ({dataset})", metric_meta['plot_label'], metric_col, aggregated, group_meta['settings'], privacy_label):
+                wrote_any = True
+                print(f"Wrote progression plot: {out_path}")
+    if roundwise_rows:
+        out_csv = out_dir / "roundwise_setting_privacy_metrics.csv"
+        pd.concat(roundwise_rows, ignore_index=True).to_csv(out_csv, index=False)
+        print(f"Wrote progression CSV: {out_csv}")
+    return wrote_any
+
+
+def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate predictive-metric/fairness/cost FL comparisons.")
     parser.add_argument(
         "--runs-dir",
@@ -661,7 +1064,13 @@ def parse_args() -> argparse.Namespace:
         "--out-dir",
         type=Path,
         default=Path(__file__).resolve().parent / "plots",
-        help="Output directory for generated CSV/PNG artifacts.",
+        help="Output directory for summary comparison artifacts.",
+    )
+    parser.add_argument(
+        "--progression-out-dir",
+        type=Path,
+        default=None,
+        help="Optional output directory for progression plots. Defaults to <out-dir>/iid_noise_progression.",
     )
     parser.add_argument(
         "--dataset",
@@ -669,14 +1078,34 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Optional dataset substring filter (e.g. medical).",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--epsilon-levels",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Optional epsilon levels to include in progression plots.",
+    )
+    parser.add_argument(
+        "--noise-levels",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Legacy alias for old run names using noise levels in progression plots.",
+    )
+    parser.add_argument(
+        "--skip-progression",
+        action="store_true",
+        help="Generate only the summary comparison artifacts and skip the progression plots.",
+    )
+    return parser.parse_args(argv)
 
 
-def main() -> int:
-    args = parse_args()
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    args = parse_args(argv)
     runs_dir = args.runs_dir.resolve()
     out_dir = args.out_dir.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+    progression_out_dir = (args.progression_out_dir.resolve() if args.progression_out_dir is not None else out_dir / "iid_noise_progression")
 
     # Remove deprecated artifacts so old non-SPD/EOD fairness and old naming do not linger.
     stale_plot_files = (
@@ -1083,8 +1512,23 @@ def main() -> int:
     print(f"Wrote: {summary_csv}")
     print(f"Wrote: {roundwise_csv}")
     print(f"Wrote: {fairness_csv}")
+    progression_wrote_any = False
+    if not args.skip_progression:
+        progression_wrote_any = generate_progression_artifacts(
+            runs_dir=runs_dir,
+            out_dir=progression_out_dir,
+            dataset=args.dataset or "medical",
+            epsilon_levels=args.epsilon_levels,
+            noise_levels=args.noise_levels,
+        )
+
     print(f"Wrote: {client_roundwise_csv}")
-    print(f"Wrote plots in: {out_dir}")
+    print(f"Wrote summary plots in: {out_dir}")
+    if not args.skip_progression:
+        if progression_wrote_any:
+            print(f"Wrote progression plots in: {progression_out_dir}")
+        else:
+            print(f"No progression plots were generated in: {progression_out_dir}")
 
     if errors:
         print("\nSkipped runs:")
